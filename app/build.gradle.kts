@@ -23,8 +23,8 @@ android {
         applicationId = "com.sina.uninotes"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("uninotesVersionCode").orElse("3").get().toInt()
-        versionName = "1.1.1"
+        versionCode = providers.gradleProperty("uninotesVersionCode").orElse("4").get().toInt()
+        versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }

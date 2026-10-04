@@ -32,6 +32,7 @@ data class CameraUiState(
 
 class CameraViewModel(
     val subjectId: String,
+    val folderId: String,
     private val photoRepository: PhotoRepository,
     private val subjectRepository: SubjectRepository,
     private val persistenceScope: CoroutineScope,
@@ -40,7 +41,7 @@ class CameraViewModel(
     val ui: StateFlow<CameraUiState> = _ui.asStateFlow()
 
     val latestPhoto: StateFlow<PhotoEntity?> =
-        photoRepository.observeLatest(subjectId)
+        photoRepository.observeLatest(subjectId, folderId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     init {
@@ -79,7 +80,7 @@ class CameraViewModel(
         persistenceScope.launch {
             var pending: PhotoEntity? = null
             try {
-                val photo = photoRepository.beginCapture(subjectId, capturedAt)
+                val photo = photoRepository.beginCapture(subjectId, folderId, capturedAt)
                 pending = photo
                 controller.takePicture(photoRepository.captureFile(photo)).getOrThrow()
                 _ui.update { it.copy(statusMessage = "Saving…") }
@@ -107,13 +108,20 @@ class CameraViewModel(
     companion object {
         fun factory(
             subjectId: String,
+            folderId: String,
             photoRepository: PhotoRepository,
             subjectRepository: SubjectRepository,
             persistenceScope: CoroutineScope,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                CameraViewModel(subjectId, photoRepository, subjectRepository, persistenceScope) as T
+                CameraViewModel(
+                    subjectId,
+                    folderId,
+                    photoRepository,
+                    subjectRepository,
+                    persistenceScope,
+                ) as T
         }
     }
 }

@@ -102,7 +102,7 @@ fun BackupScreen(
                 .padding(20.dp),
         ) {
             Text(
-                "UniNotes stores everything only on this device. Uninstalling the app removes local data, so export a backup when you need a copy.",
+                "DinoNotes stores everything only on this device. Uninstalling the app removes local data, so export a backup when you need a copy.",
                 color = UniTextSecondary,
             )
             Spacer(Modifier.height(8.dp))

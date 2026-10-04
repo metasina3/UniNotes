@@ -45,6 +45,7 @@ class BackupRepositoryTest {
             subjectDao = db.subjectDao(),
             noteDao = db.noteDao(),
             photoDao = db.photoDao(),
+            folderDao = db.folderDao(),
         )
     }
 
@@ -59,7 +60,17 @@ class BackupRepositoryTest {
         val subject = SubjectEntity("s1", "ساختمان داده", 0xFF3195FF, now, now)
         db.subjectDao().insert(subject)
         db.noteDao().insert(
-            NoteEntity("n1", "s1", "2026-10-04", "T", "body", now, now, "UTC"),
+            NoteEntity(
+                id = "n1",
+                subjectId = "s1",
+                folderId = "",
+                localDate = "2026-10-04",
+                title = "T",
+                body = "body",
+                createdAtEpochMs = now,
+                updatedAtEpochMs = now,
+                timezoneId = "UTC",
+            ),
         )
         val photoFile = storage.originalFile("s1", "p1")
         photoFile.parentFile?.mkdirs()

@@ -376,9 +376,9 @@ private fun PermissionPane(
         Spacer(Modifier.height(8.dp))
         Text(
             if (permanentlyDenied) {
-                "Camera access is denied. Open Settings to allow camera permission for UniNotes."
+                "Camera access is denied. Open Settings to allow camera permission for DinoNotes."
             } else {
-                "UniNotes needs the camera to capture whiteboard photos inside the app."
+                "DinoNotes needs the camera to capture whiteboard photos inside the app."
             },
             color = UniTextSecondary,
         )

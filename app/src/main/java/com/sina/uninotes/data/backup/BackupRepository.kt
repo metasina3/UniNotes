@@ -3,32 +3,35 @@ package com.sina.uninotes.data.backup
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
+import com.sina.uninotes.data.LibraryAccess
+import com.sina.uninotes.data.local.db.FolderDao
+import com.sina.uninotes.data.local.db.FolderEntity
 import com.sina.uninotes.data.local.db.NoteDao
 import com.sina.uninotes.data.local.db.NoteEntity
 import com.sina.uninotes.data.local.db.PhotoDao
 import com.sina.uninotes.data.local.db.PhotoEntity
 import com.sina.uninotes.data.local.db.PhotoStatus
+import com.sina.uninotes.data.local.db.RootFolder
 import com.sina.uninotes.data.local.db.SubjectDao
 import com.sina.uninotes.data.local.db.SubjectEntity
 import com.sina.uninotes.data.local.db.UniNotesDatabase
 import com.sina.uninotes.data.local.files.PhotoStorage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.sync.withLock
-import com.sina.uninotes.data.LibraryAccess
-import java.security.MessageDigest
-import java.time.LocalDate
-import java.time.ZoneId
-import kotlinx.coroutines.withContext
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 
 class BackupRepository(
     private val context: Context,
@@ -37,6 +40,7 @@ class BackupRepository(
     private val subjectDao: SubjectDao,
     private val noteDao: NoteDao,
     private val photoDao: PhotoDao,
+    private val folderDao: FolderDao,
 ) {
     suspend fun exportBackup(destination: Uri, onProgress: (Progress) -> Unit = {}): Result<Unit> =
         LibraryAccess.mutex.withLock { exportBackupUnlocked(destination, onProgress) }
@@ -54,9 +58,16 @@ class BackupRepository(
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    private fun fingerprint(subjects: List<SubjectEntity>, notes: List<NoteEntity>, photos: List<PhotoEntity>): String {
+    private fun fingerprint(
+        subjects: List<SubjectEntity>,
+        folders: List<FolderEntity>,
+        notes: List<NoteEntity>,
+        photos: List<PhotoEntity>,
+    ): String {
         val text = subjectsToJson(subjects.sortedBy { it.id }).toString() +
-            notesToJson(notes.sortedBy { it.id }).toString() + photosToJson(photos.sortedBy { it.id }).toString()
+            foldersToJson(folders.sortedBy { it.id }).toString() +
+            notesToJson(notes.sortedBy { it.id }).toString() +
+            photosToJson(photos.sortedBy { it.id }).toString()
         return MessageDigest.getInstance("SHA-256").digest(text.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it) }
     }
@@ -69,7 +80,12 @@ class BackupRepository(
             val liveRoot = File(context.filesDir, "subjects")
             if (journal.exists()) {
                 val expected = JSONObject(journal.readText()).getString("expectedFingerprint")
-                val actual = fingerprint(subjectDao.getAll(), noteDao.getAll(), photoDao.getAllReady())
+                val actual = fingerprint(
+                    subjectDao.getAll(),
+                    folderDao.getAll(),
+                    noteDao.getAll(),
+                    photoDao.getAllReady(),
+                )
                 if (oldRoot.exists() && actual != expected) {
                     check(!liveRoot.exists() || liveRoot.deleteRecursively())
                     check(oldRoot.renameTo(liveRoot)) { "Could not recover previous photo library" }
@@ -91,19 +107,29 @@ class BackupRepository(
     ): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             onProgress(Progress("Preparing snapshot…", 0.05f))
-            val (subjects, notes, photos) = database.withTransaction {
-                Triple(subjectDao.getAll(), noteDao.getAll(), photoDao.getAllReady())
+            val snapshot = database.withTransaction {
+                BackupSnapshot(
+                    subjects = subjectDao.getAll(),
+                    folders = folderDao.getAll(),
+                    notes = noteDao.getAll(),
+                    photos = photoDao.getAllReady(),
+                )
             }
+            val subjects = snapshot.subjects
+            val folders = snapshot.folders
+            val notes = snapshot.notes
+            val photos = snapshot.photos
             val checksums = JSONObject()
             photos.forEach { checksums.put(it.id, checksum(photoStorage.resolve(it.relativePath))) }
 
             val manifest = JSONObject()
                 .put("format", FORMAT)
-                .put("backupVersion", 2)
+                .put("backupVersion", 3)
                 .put("photoChecksums", checksums)
                 .put("schemaVersion", UniNotesDatabase.SCHEMA_VERSION)
                 .put("exportedAtEpochMs", System.currentTimeMillis())
                 .put("subjectCount", subjects.size)
+                .put("folderCount", folders.size)
                 .put("noteCount", notes.size)
                 .put("photoCount", photos.size)
 
@@ -115,6 +141,10 @@ class BackupRepository(
 
                     zip.putNextEntry(ZipEntry(SUBJECTS))
                     zip.write(subjectsToJson(subjects).toString().toByteArray(Charsets.UTF_8))
+                    zip.closeEntry()
+
+                    zip.putNextEntry(ZipEntry(FOLDERS))
+                    zip.write(foldersToJson(folders).toString().toByteArray(Charsets.UTF_8))
                     zip.closeEntry()
 
                     zip.putNextEntry(ZipEntry(NOTES))
@@ -160,7 +190,7 @@ class BackupRepository(
                 val oldRoot = File(context.filesDir, "restore-old")
                 val newRoot = File(context.filesDir, "restore-new")
                 val journal = File(context.filesDir, "restore-state.json")
-                check(!journal.exists() && !oldRoot.exists()) { "A previous restore needs recovery. Restart UniNotes." }
+                check(!journal.exists() && !oldRoot.exists()) { "A previous restore needs recovery. Restart DinoNotes." }
                 newRoot.deleteRecursively()
                 newRoot.mkdirs()
                 extracted.subjects.forEach { File(newRoot, it.id).mkdirs() }
@@ -173,8 +203,17 @@ class BackupRepository(
                 // From this point, finish the swap/transaction even if the UI is recreated.
                 withContext(NonCancellable) {
                     val tempJournal = File(context.filesDir, "restore-state.tmp")
-                    tempJournal.writeText(JSONObject().put("expectedFingerprint",
-                        fingerprint(extracted.subjects, extracted.notes, extracted.photos)).toString())
+                    tempJournal.writeText(
+                        JSONObject().put(
+                            "expectedFingerprint",
+                            fingerprint(
+                                extracted.subjects,
+                                extracted.folders,
+                                extracted.notes,
+                                extracted.photos,
+                            ),
+                        ).toString(),
+                    )
                     check(tempJournal.renameTo(journal))
                     var movedOld = false
                     try {
@@ -186,15 +225,17 @@ class BackupRepository(
                         database.withTransaction {
                             photoDao.deleteAll()
                             noteDao.deleteAll()
+                            folderDao.deleteAll()
                             subjectDao.deleteAll()
                             extracted.subjects.forEach { subjectDao.insert(it) }
+                            extracted.folders.forEach { folderDao.insert(it) }
                             extracted.notes.forEach { noteDao.insert(it) }
                             extracted.photos.forEach { photoDao.insert(it) }
                         }
                     } catch (error: Exception) {
                         if (movedOld) {
                             liveRoot.deleteRecursively()
-                            check(oldRoot.renameTo(liveRoot)) { "Restart UniNotes to recover the old library" }
+                            check(oldRoot.renameTo(liveRoot)) { "Restart DinoNotes to recover the old library" }
                         }
                         newRoot.deleteRecursively()
                         journal.delete()
@@ -210,8 +251,16 @@ class BackupRepository(
         }
     }
 
+    private data class BackupSnapshot(
+        val subjects: List<SubjectEntity>,
+        val folders: List<FolderEntity>,
+        val notes: List<NoteEntity>,
+        val photos: List<PhotoEntity>,
+    )
+
     private data class Extracted(
         val subjects: List<SubjectEntity>,
+        val folders: List<FolderEntity>,
         val notes: List<NoteEntity>,
         val photos: List<PhotoEntity>,
     )
@@ -223,6 +272,7 @@ class BackupRepository(
     ): Extracted {
         var manifestJson: String? = null
         var subjectsJson: String? = null
+        var foldersJson: String? = null
         var notesJson: String? = null
         var photosJson: String? = null
         var totalBytes = 0L
@@ -257,6 +307,7 @@ class BackupRepository(
                     when (name) {
                         MANIFEST -> manifestJson = readMetadata()
                         SUBJECTS -> subjectsJson = readMetadata()
+                        FOLDERS -> foldersJson = readMetadata()
                         NOTES -> notesJson = readMetadata()
                         PHOTOS_META -> photosJson = readMetadata()
                         else -> {
@@ -290,13 +341,14 @@ class BackupRepository(
             throw IllegalArgumentException("Unsupported backup format")
         }
         val backupVersion = manifest.optInt("backupVersion", 1)
-        check(backupVersion in 1..2) { "Unsupported backup version" }
+        check(backupVersion in 1..3) { "Unsupported backup version" }
         val schema = manifest.optInt("schemaVersion", -1)
-        if (schema != UniNotesDatabase.SCHEMA_VERSION) {
+        if (schema !in 1..UniNotesDatabase.SCHEMA_VERSION) {
             throw IllegalArgumentException("Unsupported backup schema version: $schema")
         }
 
         val subjects = parseSubjects(subjectsJson ?: error("Missing subjects.json"))
+        val folders = parseFolders(foldersJson ?: "[]")
         val notes = parseNotes(notesJson ?: error("Missing notes.json"))
         val photos = parsePhotos(photosJson ?: error("Missing photos.json"))
 
@@ -304,24 +356,42 @@ class BackupRepository(
         check(subjects.all { safeId(it.id) && it.name.isNotBlank() }) { "Invalid subject" }
         check(subjects.map { it.id }.toSet().size == subjects.size) { "Duplicate subjects" }
         val subjectIds = subjects.map { it.id }.toSet()
+        check(folders.all { safeId(it.id) && it.subjectId in subjectIds && it.name.isNotBlank() }) { "Invalid folder" }
+        check(folders.map { it.id }.toSet().size == folders.size) { "Duplicate folders" }
+        val folderIds = folders.map { it.id }.toSet()
         check(notes.map { it.id }.toSet().size == notes.size &&
-            notes.map { it.subjectId to it.localDate }.toSet().size == notes.size) { "Duplicate daily notes" }
+            notes.map { Triple(it.subjectId, it.folderId, it.localDate) }.toSet().size == notes.size) {
+            "Duplicate daily notes"
+        }
         check(photos.map { it.id }.toSet().size == photos.size) { "Duplicate photos" }
-        notes.forEach { check(safeId(it.id) && it.subjectId in subjectIds); LocalDate.parse(it.localDate); ZoneId.of(it.timezoneId) }
-        photos.forEach { check(safeId(it.id) && it.subjectId in subjectIds); LocalDate.parse(it.localDate); ZoneId.of(it.timezoneId) }
-        check(manifest.optInt("subjectCount", subjects.size) == subjects.size &&
-            manifest.optInt("noteCount", notes.size) == notes.size &&
-            manifest.optInt("photoCount", photos.size) == photos.size) { "Backup counts do not match" }
+        notes.forEach {
+            check(safeId(it.id) && it.subjectId in subjectIds)
+            check(it.folderId == RootFolder.ID || it.folderId in folderIds)
+            LocalDate.parse(it.localDate)
+            ZoneId.of(it.timezoneId)
+        }
+        photos.forEach {
+            check(safeId(it.id) && it.subjectId in subjectIds)
+            check(it.folderId == RootFolder.ID || it.folderId in folderIds)
+            LocalDate.parse(it.localDate)
+            ZoneId.of(it.timezoneId)
+        }
+        check(
+            manifest.optInt("subjectCount", subjects.size) == subjects.size &&
+                manifest.optInt("folderCount", folders.size) == folders.size &&
+                manifest.optInt("noteCount", notes.size) == notes.size &&
+                manifest.optInt("photoCount", photos.size) == photos.size,
+        ) { "Backup counts do not match" }
         val hashes = manifest.optJSONObject("photoChecksums")
         photos.forEach { photo ->
             val file = File(staging, "photos/${photo.subjectId}/${photo.id}.jpg")
             if (!file.exists() || file.length() == 0L) {
                 throw IllegalArgumentException("Missing photo payload for ${photo.id}")
             }
-            if (backupVersion == 2) check(hashes?.optString(photo.id) == checksum(file)) { "Photo checksum mismatch" }
+            if (backupVersion >= 2) check(hashes?.optString(photo.id) == checksum(file)) { "Photo checksum mismatch" }
         }
         onProgress(Progress("Validation succeeded", 0.55f))
-        return Extracted(subjects, notes, photos)
+        return Extracted(subjects, folders, notes, photos)
     }
 
     private fun subjectsToJson(subjects: List<SubjectEntity>): JSONArray =
@@ -338,6 +408,21 @@ class BackupRepository(
             }
         }
 
+    private fun foldersToJson(folders: List<FolderEntity>): JSONArray =
+        JSONArray().also { arr ->
+            folders.forEach { f ->
+                arr.put(
+                    JSONObject()
+                        .put("id", f.id)
+                        .put("subjectId", f.subjectId)
+                        .put("name", f.name)
+                        .put("sortOrder", f.sortOrder)
+                        .put("createdAtEpochMs", f.createdAtEpochMs)
+                        .put("updatedAtEpochMs", f.updatedAtEpochMs),
+                )
+            }
+        }
+
     private fun notesToJson(notes: List<NoteEntity>): JSONArray =
         JSONArray().also { arr ->
             notes.forEach { n ->
@@ -345,6 +430,7 @@ class BackupRepository(
                     JSONObject()
                         .put("id", n.id)
                         .put("subjectId", n.subjectId)
+                        .put("folderId", n.folderId)
                         .put("localDate", n.localDate)
                         .put("title", n.title)
                         .put("body", n.body)
@@ -362,13 +448,15 @@ class BackupRepository(
                     JSONObject()
                         .put("id", p.id)
                         .put("subjectId", p.subjectId)
+                        .put("folderId", p.folderId)
                         .put("capturedAtEpochMs", p.capturedAtEpochMs)
                         .put("localDate", p.localDate)
                         .put("timezoneId", p.timezoneId)
                         .put("width", p.width)
                         .put("height", p.height)
                         .put("orientationDegrees", p.orientationDegrees)
-                        .put("createdAtEpochMs", p.createdAtEpochMs),
+                        .put("createdAtEpochMs", p.createdAtEpochMs)
+                        .put("sortOrder", p.sortOrder),
                 )
             }
         }
@@ -391,6 +479,25 @@ class BackupRepository(
         }
     }
 
+    private fun parseFolders(json: String): List<FolderEntity> {
+        val arr = JSONArray(json)
+        return buildList {
+            for (i in 0 until arr.length()) {
+                val o = arr.getJSONObject(i)
+                add(
+                    FolderEntity(
+                        id = o.getString("id"),
+                        subjectId = o.getString("subjectId"),
+                        name = o.getString("name"),
+                        sortOrder = o.optInt("sortOrder", i),
+                        createdAtEpochMs = o.getLong("createdAtEpochMs"),
+                        updatedAtEpochMs = o.getLong("updatedAtEpochMs"),
+                    ),
+                )
+            }
+        }
+    }
+
     private fun parseNotes(json: String): List<NoteEntity> {
         val arr = JSONArray(json)
         return buildList {
@@ -400,6 +507,7 @@ class BackupRepository(
                     NoteEntity(
                         id = o.getString("id"),
                         subjectId = o.getString("subjectId"),
+                        folderId = o.optString("folderId", RootFolder.ID),
                         localDate = o.getString("localDate"),
                         title = o.optString("title", ""),
                         body = o.optString("body", ""),
@@ -423,6 +531,7 @@ class BackupRepository(
                     PhotoEntity(
                         id = id,
                         subjectId = subjectId,
+                        folderId = o.optString("folderId", RootFolder.ID),
                         relativePath = "subjects/$subjectId/photos/$id.jpg",
                         thumbnailRelativePath = null,
                         capturedAtEpochMs = o.getLong("capturedAtEpochMs"),
@@ -433,6 +542,7 @@ class BackupRepository(
                         orientationDegrees = o.optInt("orientationDegrees", 0),
                         status = PhotoStatus.READY,
                         createdAtEpochMs = o.optLong("createdAtEpochMs", o.getLong("capturedAtEpochMs")),
+                        sortOrder = o.optInt("sortOrder", i),
                     ),
                 )
             }
@@ -443,6 +553,7 @@ class BackupRepository(
         const val FORMAT = "uninotes-backup"
         const val MANIFEST = "manifest.json"
         const val SUBJECTS = "subjects.json"
+        const val FOLDERS = "folders.json"
         const val NOTES = "notes.json"
         const val PHOTOS_META = "photos.json"
         private const val MAX_ENTRY_BYTES = 80L * 1024L * 1024L

@@ -1,44 +1,49 @@
 package com.sina.uninotes.data.repository
 
 import android.database.sqlite.SQLiteConstraintException
+import com.sina.uninotes.data.LibraryAccess
 import com.sina.uninotes.data.local.db.NoteDao
 import com.sina.uninotes.data.local.db.NoteEntity
+import com.sina.uninotes.data.local.db.RootFolder
 import com.sina.uninotes.util.DateFormatting
 import com.sina.uninotes.util.Ids
-import kotlinx.coroutines.flow.Flow
-import com.sina.uninotes.data.LibraryAccess
-import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.withLock
 
 class NoteRepository(
     private val noteDao: NoteDao,
 ) {
     private val writeMutex = LibraryAccess.mutex
 
-    fun observeNotes(subjectId: String): Flow<List<NoteEntity>> =
-        noteDao.observeNotesForSubject(subjectId)
+    fun observeNotes(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+    ): Flow<List<NoteEntity>> = noteDao.observeNotesForFolder(subjectId, folderId)
 
     fun observeNote(id: String): Flow<NoteEntity?> = noteDao.observeById(id)
 
     suspend fun getNote(id: String): NoteEntity? = noteDao.getById(id)
 
     /**
-     * Opens today's daily note for [subjectId], creating it only when needed for editing.
-     * Race-safe via unique (subject_id, local_date) and retry on conflict.
+     * Opens today's daily note for [subjectId]/[folderId], creating it only when needed for editing.
+     * Race-safe via unique (subject_id, folder_id, local_date) and retry on conflict.
      */
     suspend fun openOrCreateTodayNote(
         subjectId: String,
         zoneId: ZoneId = ZoneId.systemDefault(),
         today: LocalDate = DateFormatting.todayLocalDate(zoneId),
+        folderId: String = RootFolder.ID,
     ): NoteEntity = writeMutex.withLock {
         val dateKey = DateFormatting.localDateKey(today)
-        noteDao.getBySubjectAndDate(subjectId, dateKey)?.let { return it }
+        noteDao.getBySubjectFolderAndDate(subjectId, folderId, dateKey)?.let { return it }
 
         val now = System.currentTimeMillis()
         val created = NoteEntity(
             id = Ids.newId(),
             subjectId = subjectId,
+            folderId = folderId,
             localDate = dateKey,
             title = "",
             body = "",
@@ -54,7 +59,7 @@ class NoteRepository(
                 t.cause is SQLiteConstraintException ||
                 (t.message?.contains("UNIQUE", ignoreCase = true) == true)
             if (!conflict) throw t
-            noteDao.getBySubjectAndDate(subjectId, dateKey)
+            noteDao.getBySubjectFolderAndDate(subjectId, folderId, dateKey)
                 ?: throw IllegalStateException("Unable to open daily note")
         }
     }
@@ -78,12 +83,7 @@ class NoteRepository(
                 body = body,
                 updatedAtEpochMs = maxOf(System.currentTimeMillis(), existing.updatedAtEpochMs + 1),
             )
-            if (trimmedTitle.isEmpty() && body.isBlank()) {
-                // Keep empty draft while editor is open; history query excludes blanks.
-                noteDao.update(updated)
-            } else {
-                noteDao.update(updated)
-            }
+            noteDao.update(updated)
             updated
         }
     }

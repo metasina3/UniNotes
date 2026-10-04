@@ -8,24 +8,25 @@ import androidx.exifinterface.media.ExifInterface
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import com.sina.uninotes.data.LibraryAccess
 import com.sina.uninotes.data.local.db.PhotoDao
 import com.sina.uninotes.data.local.db.PhotoEntity
 import com.sina.uninotes.data.local.db.PhotoStatus
+import com.sina.uninotes.data.local.db.RootFolder
 import com.sina.uninotes.data.local.files.PhotoStorage
 import com.sina.uninotes.data.local.files.ThumbnailGenerator
 import com.sina.uninotes.util.DateFormatting
 import com.sina.uninotes.util.Ids
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import com.sina.uninotes.data.LibraryAccess
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
+import java.time.ZoneId
 import java.util.Locale
 import java.util.TimeZone
-import java.time.ZoneId
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class PhotoRepository(
     private val photoDao: PhotoDao,
@@ -37,33 +38,68 @@ class PhotoRepository(
     // This set is intentionally process-local: unfinished captures become recoverable after restart.
     private val activeCaptures = mutableSetOf<String>()
 
-    fun pagingPhotos(subjectId: String): Flow<PagingData<PhotoEntity>> = Pager(
+    fun pagingPhotos(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+    ): Flow<PagingData<PhotoEntity>> = Pager(
         config = PagingConfig(pageSize = 60, prefetchDistance = 20, enablePlaceholders = false),
-        pagingSourceFactory = { photoDao.pagingPhotosForSubject(subjectId) },
+        pagingSourceFactory = { photoDao.pagingPhotosForFolder(subjectId, folderId) },
     ).flow
 
-    fun observePhotos(subjectId: String): Flow<List<PhotoEntity>> = photoDao.observePhotosForSubject(subjectId)
-    fun observeLatest(subjectId: String): Flow<PhotoEntity?> = photoDao.observeLatestPhoto(subjectId)
-    suspend fun getPhoto(id: String): PhotoEntity? = photoDao.getById(id)
-    suspend fun getReadyForSubject(subjectId: String): List<PhotoEntity> = photoDao.getReadyForSubject(subjectId)
+    fun observePhotos(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+    ): Flow<List<PhotoEntity>> = photoDao.observePhotosForFolder(subjectId, folderId)
 
-    suspend fun beginCapture(subjectId: String, capturedAtEpochMs: Long = System.currentTimeMillis(),
-        zoneId: ZoneId = ZoneId.systemDefault()): PhotoEntity = captureMutex.withLock {
-        beginCaptureUnlocked(subjectId, capturedAtEpochMs, zoneId)
+    fun observeLatest(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+    ): Flow<PhotoEntity?> = photoDao.observeLatestPhoto(subjectId, folderId)
+
+    suspend fun getPhoto(id: String): PhotoEntity? = photoDao.getById(id)
+
+    suspend fun getReadyForFolder(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+    ): List<PhotoEntity> = photoDao.getReadyForFolder(subjectId, folderId)
+
+    suspend fun getReadyForSubject(subjectId: String): List<PhotoEntity> =
+        photoDao.getReadyForSubject(subjectId)
+
+    suspend fun beginCapture(
+        subjectId: String,
+        folderId: String = RootFolder.ID,
+        capturedAtEpochMs: Long = System.currentTimeMillis(),
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ): PhotoEntity = captureMutex.withLock {
+        beginCaptureUnlocked(subjectId, folderId, capturedAtEpochMs, zoneId)
     }
 
     // Persist ownership BEFORE asking CameraX to write the original JPEG, so recovery can find it.
     private suspend fun beginCaptureUnlocked(
         subjectId: String,
+        folderId: String = RootFolder.ID,
         capturedAtEpochMs: Long = System.currentTimeMillis(),
         zoneId: ZoneId = ZoneId.systemDefault(),
     ): PhotoEntity = withContext(Dispatchers.IO) {
         photoStorage.ensureFreeSpace()
         val id = Ids.newId()
+        val sortOrder = photoDao.maxSortOrder(subjectId, folderId) + 1
         val photo = PhotoEntity(
-            id, subjectId, photoStorage.relativeOriginalPath(subjectId, id), null,
-            capturedAtEpochMs, DateFormatting.localDateKeyFromEpoch(capturedAtEpochMs, zoneId),
-            zoneId.id, 0, 0, 0, PhotoStatus.PENDING, capturedAtEpochMs,
+            id = id,
+            subjectId = subjectId,
+            folderId = folderId,
+            relativePath = photoStorage.relativeOriginalPath(subjectId, id),
+            thumbnailRelativePath = null,
+            capturedAtEpochMs = capturedAtEpochMs,
+            localDate = DateFormatting.localDateKeyFromEpoch(capturedAtEpochMs, zoneId),
+            timezoneId = zoneId.id,
+            width = 0,
+            height = 0,
+            orientationDegrees = 0,
+            status = PhotoStatus.PENDING,
+            createdAtEpochMs = capturedAtEpochMs,
+            sortOrder = sortOrder,
         )
         photoDao.insert(photo)
         activeCaptures.add(id)
@@ -94,8 +130,13 @@ class PhotoRepository(
         val thumb = photoStorage.thumbnailFile(photo.subjectId, photo.id)
         val thumbOk = thumbnailGenerator.generate(original, thumb)
         val ready = photo.copy(
-            width = bounds.outWidth, height = bounds.outHeight,
-            thumbnailRelativePath = if (thumbOk) photoStorage.relativeThumbnailPath(photo.subjectId, photo.id) else null,
+            width = bounds.outWidth,
+            height = bounds.outHeight,
+            thumbnailRelativePath = if (thumbOk) {
+                photoStorage.relativeThumbnailPath(photo.subjectId, photo.id)
+            } else {
+                null
+            },
             status = PhotoStatus.READY,
         )
         photoDao.update(ready)
@@ -122,12 +163,13 @@ class PhotoRepository(
         resolver: ContentResolver,
         subjectId: String,
         uri: Uri,
+        folderId: String = RootFolder.ID,
         zoneId: ZoneId = ZoneId.systemDefault(),
     ): Result<PhotoEntity> = withContext(Dispatchers.IO) {
         runCatching {
             val jpegBytes = readUriAsJpegBytes(resolver, uri)
             val capturedAt = readCaptureTimeMs(resolver, uri) ?: System.currentTimeMillis()
-            val photo = beginCapture(subjectId, capturedAt, zoneId)
+            val photo = beginCapture(subjectId, folderId, capturedAt, zoneId)
             try {
                 captureFile(photo).outputStream().use { it.write(jpegBytes) }
                 completeCapture(photo).getOrThrow()
@@ -142,11 +184,12 @@ class PhotoRepository(
         resolver: ContentResolver,
         subjectId: String,
         uris: List<Uri>,
+        folderId: String = RootFolder.ID,
     ): Result<Int> = withContext(Dispatchers.IO) {
         runCatching {
             var count = 0
             uris.forEach { uri ->
-                importFromUri(resolver, subjectId, uri).onSuccess { count++ }
+                importFromUri(resolver, subjectId, uri, folderId).onSuccess { count++ }
             }
             count
         }
@@ -199,6 +242,70 @@ class PhotoRepository(
                 photoDao.update(photo.copy(status = PhotoStatus.DELETING))
                 photoStorage.deletePhotoFiles(photo.subjectId, photo.id)
                 photoDao.deleteById(photoId)
+            }
+        }
+    }
+
+    suspend fun deletePhotos(photoIds: Collection<String>): Result<Int> = withContext(Dispatchers.IO) {
+        captureMutex.withLock {
+            runCatching {
+                var deleted = 0
+                photoIds.forEach { id ->
+                    val photo = photoDao.getById(id) ?: return@forEach
+                    photoDao.update(photo.copy(status = PhotoStatus.DELETING))
+                    photoStorage.deletePhotoFiles(photo.subjectId, photo.id)
+                    photoDao.deleteById(id)
+                    deleted++
+                }
+                deleted
+            }
+        }
+    }
+
+    /**
+     * Persist a custom gallery order for photos in the same subject/folder.
+     * [orderedIds] must contain every READY photo id exactly once.
+     */
+    suspend fun reorderPhotos(
+        subjectId: String,
+        folderId: String,
+        orderedIds: List<String>,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        captureMutex.withLock {
+            runCatching {
+                val current = photoDao.getReadyForFolder(subjectId, folderId)
+                check(current.map { it.id }.toSet() == orderedIds.toSet()) {
+                    "Photo order does not match gallery contents"
+                }
+                val byId = current.associateBy { it.id }
+                orderedIds.forEachIndexed { index, id ->
+                    val photo = byId.getValue(id)
+                    if (photo.sortOrder != index) {
+                        photoDao.update(photo.copy(sortOrder = index))
+                    }
+                }
+            }
+        }
+    }
+
+    suspend fun movePhoto(
+        subjectId: String,
+        folderId: String,
+        photoId: String,
+        delta: Int,
+    ): Result<Unit> = withContext(Dispatchers.IO) {
+        captureMutex.withLock {
+            runCatching {
+                val current = photoDao.getReadyForFolder(subjectId, folderId).toMutableList()
+                val index = current.indexOfFirst { it.id == photoId }
+                check(index >= 0) { "Photo not found" }
+                val target = (index + delta).coerceIn(0, current.lastIndex)
+                if (target == index) return@runCatching
+                val item = current.removeAt(index)
+                current.add(target, item)
+                current.forEachIndexed { i, photo ->
+                    if (photo.sortOrder != i) photoDao.update(photo.copy(sortOrder = i))
+                }
             }
         }
     }

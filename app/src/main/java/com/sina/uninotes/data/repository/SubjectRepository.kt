@@ -1,25 +1,27 @@
 package com.sina.uninotes.data.repository
 
 import androidx.room.withTransaction
+import com.sina.uninotes.data.LibraryAccess
+import com.sina.uninotes.data.local.db.FolderDao
+import com.sina.uninotes.data.local.db.NoteDao
+import com.sina.uninotes.data.local.db.PhotoDao
 import com.sina.uninotes.data.local.db.SubjectDao
 import com.sina.uninotes.data.local.db.SubjectEntity
 import com.sina.uninotes.data.local.db.SubjectWithCounts
-import com.sina.uninotes.data.local.db.NoteDao
-import com.sina.uninotes.data.local.db.PhotoDao
 import com.sina.uninotes.data.local.db.UniNotesDatabase
 import com.sina.uninotes.data.local.files.PhotoStorage
 import com.sina.uninotes.util.Ids
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.withLock
-import com.sina.uninotes.data.LibraryAccess
+import kotlinx.coroutines.withContext
 
 class SubjectRepository(
     private val subjectDao: SubjectDao,
     private val photoDao: PhotoDao,
     private val noteDao: NoteDao,
     private val photoStorage: PhotoStorage,
+    private val folderDao: FolderDao? = null,
     private val database: UniNotesDatabase? = null,
 ) {
     suspend fun createSubject(name: String, colorArgb: Long): Result<SubjectEntity> = withContext(Dispatchers.IO) {
@@ -81,11 +83,13 @@ class SubjectRepository(
             db.withTransaction {
                 photoDao.deleteForSubject(id)
                 noteDao.deleteForSubject(id)
+                folderDao?.deleteForSubject(id)
                 subjectDao.deleteById(id)
             }
         } else {
             photoDao.deleteForSubject(id)
             noteDao.deleteForSubject(id)
+            folderDao?.deleteForSubject(id)
             subjectDao.deleteById(id)
         }
         photoStorage.deleteSubjectFiles(id)

@@ -42,13 +42,23 @@ fun UniNotesNavHost(container: AppContainer) {
 
         composable(
             route = Routes.Subject,
-            arguments = listOf(navArgument("subjectId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("subjectId") { type = NavType.StringType },
+                navArgument("folderId") {
+                    type = NavType.StringType
+                    defaultValue = "_root"
+                },
+            ),
         ) { entry ->
             val subjectId = entry.arguments?.getString("subjectId").orEmpty()
+            val folderId = Routes.decodeFolderId(entry.arguments?.getString("folderId"))
             val vm: SubjectViewModel = viewModel(
+                key = "subject-$subjectId-$folderId",
                 factory = SubjectViewModel.factory(
                     subjectId,
+                    folderId,
                     container.subjectRepository,
+                    container.folderRepository,
                     container.noteRepository,
                     container.photoRepository,
                 ),
@@ -58,15 +68,20 @@ fun UniNotesNavHost(container: AppContainer) {
                 photoRepository = container.photoRepository,
                 subjectRepository = container.subjectRepository,
                 onBack = { navController.popBackStack() },
-                onOpenCamera = { navController.navigate(Routes.camera(subjectId)) },
-                onWriteNote = { navController.navigate(Routes.noteEditor(subjectId)) },
-                onOpenNote = { noteId -> navController.navigate(Routes.noteEditor(subjectId, noteId)) },
-                onOpenPhoto = { photoId -> navController.navigate(Routes.photoViewer(subjectId, photoId)) },
+                onOpenFolder = { id -> navController.navigate(Routes.subject(subjectId, id)) },
+                onOpenCamera = { navController.navigate(Routes.camera(subjectId, folderId)) },
+                onWriteNote = { navController.navigate(Routes.noteEditor(subjectId, folderId = folderId)) },
+                onOpenNote = { noteId ->
+                    navController.navigate(Routes.noteEditor(subjectId, noteId, folderId))
+                },
+                onOpenPhoto = { photoId ->
+                    navController.navigate(Routes.photoViewer(subjectId, photoId, folderId))
+                },
             )
         }
 
         composable(
-            route = "note/{subjectId}?noteId={noteId}",
+            route = Routes.NoteEditor,
             arguments = listOf(
                 navArgument("subjectId") { type = NavType.StringType },
                 navArgument("noteId") {
@@ -74,14 +89,20 @@ fun UniNotesNavHost(container: AppContainer) {
                     nullable = true
                     defaultValue = null
                 },
+                navArgument("folderId") {
+                    type = NavType.StringType
+                    defaultValue = "_root"
+                },
             ),
         ) { entry ->
             val subjectId = entry.arguments?.getString("subjectId").orEmpty()
             val noteId = entry.arguments?.getString("noteId")
+            val folderId = Routes.decodeFolderId(entry.arguments?.getString("folderId"))
             val vm: NoteEditorViewModel = viewModel(
                 factory = NoteEditorViewModel.factory(
                     subjectId = subjectId,
                     noteId = noteId,
+                    folderId = folderId,
                     noteRepository = container.noteRepository,
                     subjectRepository = container.subjectRepository,
                     persistenceScope = container.applicationScope,
@@ -95,12 +116,20 @@ fun UniNotesNavHost(container: AppContainer) {
 
         composable(
             route = Routes.Camera,
-            arguments = listOf(navArgument("subjectId") { type = NavType.StringType }),
+            arguments = listOf(
+                navArgument("subjectId") { type = NavType.StringType },
+                navArgument("folderId") {
+                    type = NavType.StringType
+                    defaultValue = "_root"
+                },
+            ),
         ) { entry ->
             val subjectId = entry.arguments?.getString("subjectId").orEmpty()
+            val folderId = Routes.decodeFolderId(entry.arguments?.getString("folderId"))
             val vm: CameraViewModel = viewModel(
                 factory = CameraViewModel.factory(
                     subjectId,
+                    folderId,
                     container.photoRepository,
                     container.subjectRepository,
                     container.applicationScope,
@@ -111,7 +140,7 @@ fun UniNotesNavHost(container: AppContainer) {
                 photoRepository = container.photoRepository,
                 onBack = { navController.popBackStack() },
                 onOpenPhoto = { photoId ->
-                    navController.navigate(Routes.photoViewer(subjectId, photoId))
+                    navController.navigate(Routes.photoViewer(subjectId, photoId, folderId))
                 },
             )
         }
@@ -121,12 +150,18 @@ fun UniNotesNavHost(container: AppContainer) {
             arguments = listOf(
                 navArgument("subjectId") { type = NavType.StringType },
                 navArgument("photoId") { type = NavType.StringType },
+                navArgument("folderId") {
+                    type = NavType.StringType
+                    defaultValue = "_root"
+                },
             ),
         ) { entry ->
             val subjectId = entry.arguments?.getString("subjectId").orEmpty()
             val photoId = entry.arguments?.getString("photoId").orEmpty()
+            val folderId = Routes.decodeFolderId(entry.arguments?.getString("folderId"))
             PhotoViewerScreen(
                 subjectId = subjectId,
+                folderId = folderId,
                 initialPhotoId = photoId,
                 photoRepository = container.photoRepository,
                 onBack = { navController.popBackStack() },

@@ -37,6 +37,7 @@ data class NoteEditorUiState(
 
 class NoteEditorViewModel(
     private val subjectId: String,
+    private val folderId: String,
     private val initialNoteId: String?,
     private val noteRepository: NoteRepository,
     private val subjectRepository: SubjectRepository,
@@ -86,10 +87,11 @@ class NoteEditorViewModel(
         val subjectName = subjectRepository.getSubject(subjectId)?.name.orEmpty()
         val existingId = initialNoteId ?: loadedNoteId
         val note = if (!existingId.isNullOrBlank()) {
-            noteRepository.getNote(existingId)?.takeIf { it.subjectId == subjectId }
-                ?: noteRepository.openOrCreateTodayNote(subjectId)
+            noteRepository.getNote(existingId)?.takeIf {
+                it.subjectId == subjectId && it.folderId == folderId
+            } ?: noteRepository.openOrCreateTodayNote(subjectId, folderId = folderId)
         } else {
-            noteRepository.openOrCreateTodayNote(subjectId)
+            noteRepository.openOrCreateTodayNote(subjectId, folderId = folderId)
         }
         loadedNoteId = note.id
         lastKnownUpdatedAt = note.updatedAtEpochMs
@@ -213,6 +215,7 @@ class NoteEditorViewModel(
         fun factory(
             subjectId: String,
             noteId: String?,
+            folderId: String,
             noteRepository: NoteRepository,
             subjectRepository: SubjectRepository,
             persistenceScope: CoroutineScope,
@@ -220,6 +223,7 @@ class NoteEditorViewModel(
             initializer {
                 NoteEditorViewModel(
                     subjectId = subjectId,
+                    folderId = folderId,
                     initialNoteId = noteId,
                     noteRepository = noteRepository,
                     subjectRepository = subjectRepository,

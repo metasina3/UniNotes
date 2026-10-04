@@ -58,11 +58,13 @@ import kotlinx.coroutines.launch
 @Composable
 fun PhotoViewerScreen(
     subjectId: String,
+    folderId: String = "",
     initialPhotoId: String,
     photoRepository: PhotoRepository,
     onBack: () -> Unit,
 ) {
-    val photos by photoRepository.observePhotos(subjectId).collectAsStateWithLifecycle(initialValue = emptyList())
+    val photos by photoRepository.observePhotos(subjectId, folderId)
+        .collectAsStateWithLifecycle(initialValue = emptyList())
     val startIndex = photos.indexOfFirst { it.id == initialPhotoId }.coerceAtLeast(0)
     val pagerState = rememberPagerState(initialPage = startIndex, pageCount = { photos.size.coerceAtLeast(1) })
     var deleteTarget by remember { mutableStateOf<PhotoEntity?>(null) }
@@ -140,7 +142,7 @@ fun PhotoViewerScreen(
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete photo?") },
-            text = { Text("This photo will be permanently removed from UniNotes.") },
+            text = { Text("This photo will be permanently removed from DinoNotes.") },
             confirmButton = {
                 TextButton(
                     onClick = {

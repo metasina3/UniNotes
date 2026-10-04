@@ -37,6 +37,7 @@ class SubjectRepositoryTest {
             subjectDao = db.subjectDao(),
             photoDao = db.photoDao(),
             noteDao = db.noteDao(),
+            folderDao = db.folderDao(),
             photoStorage = storage,
             database = db,
         )

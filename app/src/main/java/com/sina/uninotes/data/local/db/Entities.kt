@@ -15,6 +15,34 @@ data class SubjectEntity(
     @ColumnInfo(name = "updated_at_epoch_ms") val updatedAtEpochMs: Long,
 )
 
+/**
+ * Sub-folder inside a subject (e.g. "جلسه 1").
+ * Empty [folderId] on notes/photos means content lives at the subject root.
+ */
+@Entity(
+    tableName = "folders",
+    foreignKeys = [
+        ForeignKey(
+            entity = SubjectEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["subject_id"],
+            onDelete = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index(value = ["subject_id", "sort_order"]),
+        Index(value = ["subject_id", "name"]),
+    ],
+)
+data class FolderEntity(
+    @PrimaryKey val id: String,
+    @ColumnInfo(name = "subject_id") val subjectId: String,
+    val name: String,
+    @ColumnInfo(name = "sort_order") val sortOrder: Int,
+    @ColumnInfo(name = "created_at_epoch_ms") val createdAtEpochMs: Long,
+    @ColumnInfo(name = "updated_at_epoch_ms") val updatedAtEpochMs: Long,
+)
+
 @Entity(
     tableName = "notes",
     foreignKeys = [
@@ -26,13 +54,15 @@ data class SubjectEntity(
         ),
     ],
     indices = [
-        Index(value = ["subject_id", "local_date"], unique = true),
-        Index(value = ["subject_id", "updated_at_epoch_ms"]),
+        Index(value = ["subject_id", "folder_id", "local_date"], unique = true),
+        Index(value = ["subject_id", "folder_id", "updated_at_epoch_ms"]),
     ],
 )
 data class NoteEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "subject_id") val subjectId: String,
+    /** Empty string = subject root; otherwise a [FolderEntity.id]. */
+    @ColumnInfo(name = "folder_id") val folderId: String = "",
     /** ISO local date yyyy-MM-dd in the device's default timezone at creation. */
     @ColumnInfo(name = "local_date") val localDate: String,
     val title: String,
@@ -53,7 +83,8 @@ data class NoteEntity(
         ),
     ],
     indices = [
-        Index(value = ["subject_id", "captured_at_epoch_ms"]),
+        Index(value = ["subject_id", "folder_id", "sort_order"]),
+        Index(value = ["subject_id", "folder_id", "captured_at_epoch_ms"]),
         Index(value = ["subject_id", "local_date"]),
         Index(value = ["status"]),
     ],
@@ -61,6 +92,8 @@ data class NoteEntity(
 data class PhotoEntity(
     @PrimaryKey val id: String,
     @ColumnInfo(name = "subject_id") val subjectId: String,
+    /** Empty string = subject root; otherwise a [FolderEntity.id]. */
+    @ColumnInfo(name = "folder_id") val folderId: String = "",
     @ColumnInfo(name = "relative_path") val relativePath: String,
     @ColumnInfo(name = "thumbnail_relative_path") val thumbnailRelativePath: String?,
     @ColumnInfo(name = "captured_at_epoch_ms") val capturedAtEpochMs: Long,
@@ -71,6 +104,8 @@ data class PhotoEntity(
     @ColumnInfo(name = "orientation_degrees") val orientationDegrees: Int,
     val status: String,
     @ColumnInfo(name = "created_at_epoch_ms") val createdAtEpochMs: Long,
+    /** User-controlled gallery order within the same subject/folder. */
+    @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
 )
 
 object PhotoStatus {
@@ -80,10 +115,26 @@ object PhotoStatus {
     const val DELETING = "DELETING"
 }
 
+/** Sentinel folder id for content at the subject root (not inside a subfolder). */
+object RootFolder {
+    const val ID = ""
+}
+
 data class SubjectWithCounts(
     val id: String,
     val name: String,
     @ColumnInfo(name = "color_argb") val colorArgb: Long,
+    @ColumnInfo(name = "created_at_epoch_ms") val createdAtEpochMs: Long,
+    @ColumnInfo(name = "updated_at_epoch_ms") val updatedAtEpochMs: Long,
+    @ColumnInfo(name = "photo_count") val photoCount: Int,
+    @ColumnInfo(name = "note_count") val noteCount: Int,
+)
+
+data class FolderWithCounts(
+    val id: String,
+    @ColumnInfo(name = "subject_id") val subjectId: String,
+    val name: String,
+    @ColumnInfo(name = "sort_order") val sortOrder: Int,
     @ColumnInfo(name = "created_at_epoch_ms") val createdAtEpochMs: Long,
     @ColumnInfo(name = "updated_at_epoch_ms") val updatedAtEpochMs: Long,
     @ColumnInfo(name = "photo_count") val photoCount: Int,
