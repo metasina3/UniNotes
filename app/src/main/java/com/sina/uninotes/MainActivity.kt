@@ -1,0 +1,30 @@
+package com.sina.uninotes
+
+import android.os.Bundle
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.Surface
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import com.sina.uninotes.ui.navigation.UniNotesNavHost
+import com.sina.uninotes.ui.theme.UniNotesTheme
+
+class MainActivity : AppCompatActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+        val app = application as UniNotesApp
+        setContent {
+            UniNotesTheme {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = Color(0xFF141A1F),
+                ) {
+                    UniNotesNavHost(container = app.container)
+                }
+            }
+        }
+    }
+}
