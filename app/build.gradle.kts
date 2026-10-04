@@ -61,7 +61,7 @@ android {
             signingConfig = when {
                 !releaseStore.isNullOrBlank() -> signingConfigs.getByName("personalRelease")
                 keystorePropertiesFile.exists() -> signingConfigs.getByName("localRelease")
-                else -> signingConfigs.getByName("debug")
+                else -> null
             }
             isMinifyEnabled = false
             proguardFiles(
