@@ -9,6 +9,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.style.ResolvedTextDirection
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowCompat
 import androidx.room.withTransaction
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
@@ -42,7 +43,9 @@ class AppSmokeTest {
     }
 
     private fun capture(name: String) {
+        rule.waitUntil(10000) { rule.activity.hasWindowFocus() }
         rule.waitForIdle()
+        InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(100, 5000)
         val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
         val context = rule.activity.applicationContext
         val dir = File(context.getExternalFilesDir(null), "screenshots").apply { mkdirs() }
@@ -52,6 +55,11 @@ class AppSmokeTest {
 
     @Test fun subjectActionsStayAboveSystemNavigation() {
         openSubject()
+        rule.runOnIdle {
+            val controller = WindowCompat.getInsetsController(rule.activity.window, rule.activity.window.decorView)
+            assertThat(controller.isAppearanceLightStatusBars).isFalse()
+            assertThat(controller.isAppearanceLightNavigationBars).isFalse()
+        }
         val actionBounds = rule.onNodeWithTag("subjectActions").fetchSemanticsNode().boundsInWindow
         rule.runOnIdle {
             val decor = rule.activity.window.decorView

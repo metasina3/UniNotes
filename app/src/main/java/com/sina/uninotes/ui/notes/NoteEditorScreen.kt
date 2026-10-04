@@ -98,7 +98,8 @@ fun NoteEditorScreen(
                         val dateLabel = ui.localDate.takeIf { it.isNotBlank() }?.let {
                             DateFormatting.noteListDate(LocalDate.parse(it))
                         }.orEmpty()
-                        Text(dateLabel, color = UniTextSecondary)
+                        Text(dateLabel, color = UniTextSecondary,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
                     }
                 },
                 navigationIcon = {

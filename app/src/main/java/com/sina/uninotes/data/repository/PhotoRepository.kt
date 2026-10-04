@@ -25,6 +25,9 @@ class PhotoRepository(
     private val thumbnailGenerator: ThumbnailGenerator,
 ) {
     private val captureMutex = LibraryAccess.mutex
+    // A startup recovery job must never finalize/delete a capture CameraX is still writing.
+    // This set is intentionally process-local: unfinished captures become recoverable after restart.
+    private val activeCaptures = mutableSetOf<String>()
 
     fun pagingPhotos(subjectId: String): Flow<PagingData<PhotoEntity>> = Pager(
         config = PagingConfig(pageSize = 60, prefetchDistance = 20, enablePlaceholders = false),
@@ -55,13 +58,16 @@ class PhotoRepository(
             zoneId.id, 0, 0, 0, PhotoStatus.PENDING, capturedAtEpochMs,
         )
         photoDao.insert(photo)
+        activeCaptures.add(id)
         photo
     }
 
     fun captureFile(photo: PhotoEntity): File = photoStorage.tempFile(photo.subjectId, photo.id)
 
     suspend fun completeCapture(photo: PhotoEntity): Result<PhotoEntity> = withContext(Dispatchers.IO) {
-        captureMutex.withLock { runCatching { finalizeCapture(photo) } }
+        captureMutex.withLock {
+            runCatching { finalizeCapture(photo) }.also { activeCaptures.remove(photo.id) }
+        }
     }
 
     private suspend fun finalizeCapture(photo: PhotoEntity): PhotoEntity {
@@ -91,8 +97,12 @@ class PhotoRepository(
 
     suspend fun discardCapture(photo: PhotoEntity) = withContext(Dispatchers.IO) {
         captureMutex.withLock {
-            photoStorage.deletePhotoFiles(photo.subjectId, photo.id)
-            photoDao.deleteById(photo.id)
+            try {
+                photoStorage.deletePhotoFiles(photo.subjectId, photo.id)
+                photoDao.deleteById(photo.id)
+            } finally {
+                activeCaptures.remove(photo.id)
+            }
         }
     }
 
@@ -111,6 +121,7 @@ class PhotoRepository(
     suspend fun recoverInterruptedCaptures() = withContext(Dispatchers.IO) {
         captureMutex.withLock {
             photoDao.getUnfinished().forEach { photo ->
+                if (photo.status == PhotoStatus.PENDING && photo.id in activeCaptures) return@forEach
                 runCatching {
                     if (photo.status == PhotoStatus.PENDING) {
                         finalizeCapture(photo)

@@ -141,7 +141,7 @@ fun SubjectScreen(
                 ) {
                     Icon(Icons.Default.CameraAlt, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Camera", fontWeight = FontWeight.Bold)
+                    Text("Camera", color = UniBackground, fontWeight = FontWeight.Bold)
                 }
                 Button(
                     onClick = onWriteNote,
@@ -156,7 +156,7 @@ fun SubjectScreen(
                 ) {
                     Icon(Icons.Default.EditNote, contentDescription = null)
                     Spacer(Modifier.size(8.dp))
-                    Text("Write note", fontWeight = FontWeight.Bold)
+                    Text("Write note", color = UniBackground, fontWeight = FontWeight.Bold)
                 }
             }
         },

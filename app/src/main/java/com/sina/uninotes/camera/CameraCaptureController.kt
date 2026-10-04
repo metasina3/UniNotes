@@ -57,6 +57,7 @@ class CameraCaptureController(
         previewView: PreviewView,
         flashMode: FlashMode,
     ) {
+        _ready.value = false
         val provider = awaitProvider()
         cameraProvider = provider
         provider.unbindAll()
@@ -97,7 +98,9 @@ class CameraCaptureController(
             supportsFrontCamera = hasFrontCamera(provider) && provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA),
         )
         cam.cameraInfo.zoomState.observe(lifecycleOwner) { state -> _zoom.value = state.zoomRatio }
-        _ready.value = true
+        previewView.previewStreamState.observe(lifecycleOwner) { stream ->
+            _ready.value = stream == PreviewView.StreamState.STREAMING && camera != null
+        }
         applyFlash(flashMode)
     }
 
@@ -109,6 +112,7 @@ class CameraCaptureController(
     }
 
     fun switchCamera() {
+        _ready.value = false
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) {
             CameraSelector.LENS_FACING_FRONT
         } else {

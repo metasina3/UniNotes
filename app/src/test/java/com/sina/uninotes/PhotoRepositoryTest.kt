@@ -20,9 +20,10 @@ class PhotoRepositoryTest {
     private lateinit var db: UniNotesDatabase
     private lateinit var storage: PhotoStorage
     private lateinit var photos: PhotoRepository
+    private lateinit var context: Context
 
     @Before fun setup() = runBlocking {
-        val context = ApplicationProvider.getApplicationContext<Context>()
+        context = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(context, UniNotesDatabase::class.java).allowMainThreadQueries().build()
         storage = PhotoStorage(context)
         photos = PhotoRepository(db.photoDao(), storage, ThumbnailGenerator(context))
@@ -41,9 +42,20 @@ class PhotoRepositoryTest {
     @Test fun incompleteCaptureIsRemovedDuringRecovery() = runBlocking {
         val photo = photos.beginCapture("s1")
         photos.captureFile(photo).writeBytes(byteArrayOf(1, 2, 3))
+        // A new repository represents the next process, with no active CameraX writer.
+        photos = PhotoRepository(db.photoDao(), storage, ThumbnailGenerator(context))
         photos.recoverInterruptedCaptures()
         assertThat(db.photoDao().getById(photo.id)).isNull()
         assertThat(photos.captureFile(photo).exists()).isFalse()
+    }
+
+    @Test fun startupRecoveryDoesNotRemoveAnActiveCapture() = runBlocking {
+        val photo = photos.beginCapture("s1")
+        photos.captureFile(photo).writeBytes(byteArrayOf(1, 2, 3))
+        photos.recoverInterruptedCaptures()
+        assertThat(db.photoDao().getById(photo.id)?.status).isEqualTo(PhotoStatus.PENDING)
+        assertThat(photos.captureFile(photo).exists()).isTrue()
+        photos.discardCapture(photo)
     }
 
     @Test fun deletionTombstoneRecoversAcrossRestart() = runBlocking {

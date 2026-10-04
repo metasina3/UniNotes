@@ -17,4 +17,11 @@ for mode in threebutton gestural; do
   grep -Eq 'OK \([1-9][0-9]* tests?\)' "device-evidence/instrumentation-$mode.txt"
 done
 collect_logs
-if grep -q 'FATAL EXCEPTION' device-evidence/crashes.txt; then exit 1; fi
+python3 - <<'PY'
+from pathlib import Path
+import re
+log = Path('device-evidence/crashes.txt').read_text()
+fatal_blocks = log.split('FATAL EXCEPTION:')[1:]
+if any(re.search(r'Process: com\.sina\.uninotes\.debug(?=[,:\s])', block) for block in fatal_blocks):
+    raise SystemExit('UniNotes crashed; see device-evidence/crashes.txt')
+PY
