@@ -67,7 +67,7 @@ class AppSmokeTest {
             // The tag wraps the whole inset-aware action area. Check the actual button bounds below.
             assertThat(actionBounds.bottom).isAtMost(decor.height.toFloat())
         }
-        for (label in listOf("Camera", "Write note")) {
+        for (label in listOf("Camera", "Note")) {
             val bounds = rule.onNodeWithText(label).fetchSemanticsNode().boundsInWindow
             rule.runOnIdle {
                 val decor = rule.activity.window.decorView
@@ -84,7 +84,7 @@ class AppSmokeTest {
 
     @Test fun mixedPersianEnglishSurvivesImmediateBackAndReopen() {
         openSubject("ساختمان داده")
-        rule.onNodeWithText("Write note").performClick()
+        rule.onNodeWithText("Note").performClick()
         val body = rule.onAllNodes(hasSetTextAction())[1]
         rule.waitUntil(10000) {
             runBlocking { container.database.noteDao().getAll().isNotEmpty() }
@@ -102,7 +102,7 @@ class AppSmokeTest {
         rule.waitUntil(10000) {
             runBlocking { container.database.noteDao().getAll().singleOrNull()?.body == sample }
         }
-        rule.onNodeWithText("Write note").performClick()
+        rule.onNodeWithText("Note").performClick()
         rule.waitUntil(10000) {
             rule.onAllNodes(hasSetTextAction() and hasText(sample)).fetchSemanticsNodes().isNotEmpty()
         }
@@ -139,7 +139,7 @@ class AppSmokeTest {
             rule.onAllNodesWithContentDescription("Photo taken ${photo.localDate}")
                 .fetchSemanticsNodes().isNotEmpty()
         }
-        rule.onNodeWithText("Today").assertIsDisplayed()
+        rule.onNodeWithContentDescription("Photo taken ${photo.localDate}").assertIsDisplayed()
         capture("gallery-with-photo")
         rule.onNodeWithContentDescription("Photo taken ${photo.localDate}").performClick()
         capture("photo-viewer")
