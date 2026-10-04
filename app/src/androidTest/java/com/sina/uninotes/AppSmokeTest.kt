@@ -43,7 +43,6 @@ class AppSmokeTest {
     }
 
     private fun capture(name: String) {
-        rule.waitUntil(10000) { rule.activity.hasWindowFocus() }
         rule.waitForIdle()
         InstrumentationRegistry.getInstrumentation().uiAutomation.waitForIdle(100, 5000)
         val bitmap = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()
