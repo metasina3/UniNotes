@@ -1,6 +1,10 @@
 package com.sina.uninotes.ui.backup
 
 import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Column
@@ -73,13 +77,15 @@ fun BackupScreen(
         if (uri != null) confirmRestoreUri = uri
     }
 
+    BackHandler(enabled = busy) { }
+
     Scaffold(
         containerColor = UniBackground,
         topBar = {
             TopAppBar(
                 title = { Text("Backup & Restore", color = UniText) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = onBack, enabled = !busy) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = UniText)
                     }
                 },
@@ -91,6 +97,8 @@ fun BackupScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
         ) {
             Text(
@@ -148,6 +156,7 @@ fun BackupScreen(
             },
             confirmButton = {
                 TextButton(
+                    enabled = !busy,
                     onClick = {
                         scope.launch {
                             busy = true
@@ -164,7 +173,7 @@ fun BackupScreen(
                 ) { Text("Restore") }
             },
             dismissButton = {
-                TextButton(onClick = { confirmRestoreUri = null }) { Text("Cancel") }
+                TextButton(enabled = !busy, onClick = { confirmRestoreUri = null }) { Text("Cancel") }
             },
         )
     }

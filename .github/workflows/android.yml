@@ -1,0 +1,119 @@
+name: Android build and device checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - name: Configure optional stable release signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.UNINOTES_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.UNINOTES_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.UNINOTES_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            test -n "$STORE_PASSWORD" && test -n "$KEY_PASSWORD"
+            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/uninotes.jks"
+            echo "UNINOTES_KEYSTORE_PATH=$RUNNER_TEMP/uninotes.jks" >> "$GITHUB_ENV"
+            echo 'signed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'signed=false' >> "$GITHUB_OUTPUT"
+            echo 'No release signing secrets: producing an unsigned release for private local signing.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Build, unit tests, lint and test APK
+        env:
+          UNINOTES_STORE_PASSWORD: ${{ secrets.UNINOTES_STORE_PASSWORD }}
+          UNINOTES_KEY_PASSWORD: ${{ secrets.UNINOTES_KEY_PASSWORD }}
+          UNINOTES_KEY_ALIAS: uninotes
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug :app:lintRelease -PuninotesVersionCode=$((1000 + GITHUB_RUN_NUMBER)) --stacktrace
+      - name: Verify signed release
+        if: steps.signing.outputs.signed == 'true'
+        run: |
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          python3 scripts/check_apk.py app/build/outputs/apk/release/app-release.apk
+      - name: Check unsigned release structure
+        if: steps.signing.outputs.signed != 'true'
+        run: python3 scripts/check_apk.py app/build/outputs/apk/release/app-release-unsigned.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.signing.outputs.signed == 'true' && 'signed' || 'unsigned-for-local-signing' }}
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: emulator-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/androidTest/debug/*.apk
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+
+  device-checks:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        api: [29, 35, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: actions/download-artifact@v4
+        with:
+          name: emulator-apks
+          path: apks
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Install and exercise app on Android ${{ matrix.api }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: google_apis
+          arch: x86_64
+          profile: pixel_4
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated
+          script: bash scripts/device-check.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-evidence-api-${{ matrix.api }}
+          path: device-evidence/

@@ -95,7 +95,7 @@ interface PhotoDao {
         """
         SELECT * FROM photos
         WHERE subject_id = :subjectId AND status = 'READY'
-        ORDER BY captured_at_epoch_ms DESC
+        ORDER BY local_date DESC, captured_at_epoch_ms DESC, id DESC
         """,
     )
     fun pagingPhotosForSubject(subjectId: String): PagingSource<Int, PhotoEntity>
@@ -104,7 +104,7 @@ interface PhotoDao {
         """
         SELECT * FROM photos
         WHERE subject_id = :subjectId AND status = 'READY'
-        ORDER BY captured_at_epoch_ms DESC
+        ORDER BY local_date DESC, captured_at_epoch_ms DESC, id DESC
         """,
     )
     fun observePhotosForSubject(subjectId: String): Flow<List<PhotoEntity>>
@@ -113,7 +113,7 @@ interface PhotoDao {
         """
         SELECT * FROM photos
         WHERE subject_id = :subjectId AND status = 'READY'
-        ORDER BY captured_at_epoch_ms DESC
+        ORDER BY local_date DESC, captured_at_epoch_ms DESC, id DESC
         LIMIT 1
         """,
     )
@@ -126,13 +126,16 @@ interface PhotoDao {
         """
         SELECT * FROM photos
         WHERE subject_id = :subjectId AND status = 'READY'
-        ORDER BY captured_at_epoch_ms DESC
+        ORDER BY local_date DESC, captured_at_epoch_ms DESC, id DESC
         """,
     )
     suspend fun getReadyForSubject(subjectId: String): List<PhotoEntity>
 
     @Query("SELECT * FROM photos WHERE status = 'PENDING'")
     suspend fun getPending(): List<PhotoEntity>
+
+    @Query("SELECT * FROM photos WHERE status != 'READY'")
+    suspend fun getUnfinished(): List<PhotoEntity>
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(photo: PhotoEntity)

@@ -6,7 +6,7 @@ import com.sina.uninotes.data.local.db.NoteEntity
 import com.sina.uninotes.util.DateFormatting
 import com.sina.uninotes.util.Ids
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.sync.Mutex
+import com.sina.uninotes.data.LibraryAccess
 import kotlinx.coroutines.sync.withLock
 import java.time.LocalDate
 import java.time.ZoneId
@@ -14,7 +14,7 @@ import java.time.ZoneId
 class NoteRepository(
     private val noteDao: NoteDao,
 ) {
-    private val writeMutex = Mutex()
+    private val writeMutex = LibraryAccess.mutex
 
     fun observeNotes(subjectId: String): Flow<List<NoteEntity>> =
         noteDao.observeNotesForSubject(subjectId)
@@ -76,7 +76,7 @@ class NoteRepository(
             val updated = existing.copy(
                 title = trimmedTitle,
                 body = body,
-                updatedAtEpochMs = System.currentTimeMillis(),
+                updatedAtEpochMs = maxOf(System.currentTimeMillis(), existing.updatedAtEpochMs + 1),
             )
             if (trimmedTitle.isEmpty() && body.isBlank()) {
                 // Keep empty draft while editor is open; history query excludes blanks.

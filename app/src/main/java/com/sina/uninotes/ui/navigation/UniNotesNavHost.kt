@@ -83,6 +83,7 @@ fun UniNotesNavHost(container: AppContainer) {
                     noteId = noteId,
                     noteRepository = container.noteRepository,
                     subjectRepository = container.subjectRepository,
+                    persistenceScope = container.applicationScope,
                 ),
             )
             NoteEditorScreen(
@@ -101,6 +102,7 @@ fun UniNotesNavHost(container: AppContainer) {
                     subjectId,
                     container.photoRepository,
                     container.subjectRepository,
+                    container.applicationScope,
                 ),
             )
             CameraScreen(

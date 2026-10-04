@@ -5,6 +5,8 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
+import androidx.paging.map
+import androidx.paging.insertSeparators
 import com.sina.uninotes.data.local.db.NoteEntity
 import com.sina.uninotes.data.local.db.PhotoEntity
 import com.sina.uninotes.data.local.db.SubjectEntity
@@ -15,6 +17,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.map
+
+sealed interface GalleryRow {
+    data class Header(val dateKey: String) : GalleryRow
+    data class Photo(val entity: PhotoEntity) : GalleryRow
+}
 
 class SubjectViewModel(
     val subjectId: String,
@@ -30,8 +38,15 @@ class SubjectViewModel(
         noteRepository.observeNotes(subjectId)
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val photosPaging: Flow<PagingData<PhotoEntity>> =
-        photoRepository.pagingPhotos(subjectId).cachedIn(viewModelScope)
+    val photosPaging: Flow<PagingData<GalleryRow>> =
+        photoRepository.pagingPhotos(subjectId).map { page ->
+            page.map { GalleryRow.Photo(it) }
+                .insertSeparators<GalleryRow.Photo, GalleryRow> { before, after ->
+                    if (after != null && before?.entity?.localDate != after.entity.localDate) {
+                        GalleryRow.Header(after.entity.localDate)
+                    } else null
+                }
+        }.cachedIn(viewModelScope)
 
     companion object {
         fun factory(

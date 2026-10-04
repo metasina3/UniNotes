@@ -21,6 +21,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MenuBook
+import androidx.compose.foundation.border
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -71,7 +76,11 @@ fun HomeScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text("UniNotes", color = UniText, fontWeight = FontWeight.Bold)
+                    Column {
+                        Text("My Subjects", color = UniText, fontWeight = FontWeight.Bold)
+                        Text("Your university, organized", color = UniTextSecondary,
+                            style = androidx.compose.material3.MaterialTheme.typography.bodyMedium)
+                    }
                 },
                 actions = {
                     IconButton(onClick = { menuExpanded = true }) {
@@ -94,7 +103,8 @@ fun HomeScreen(
             FloatingActionButton(
                 onClick = viewModel::showCreate,
                 containerColor = UniPrimary,
-                contentColor = UniText,
+                contentColor = UniBackground,
+                shape = CircleShape,
             ) {
                 Icon(Icons.Default.Add, contentDescription = "Create subject")
             }
@@ -112,7 +122,7 @@ fun HomeScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(16.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 items(subjects, key = { it.id }) { subject ->
@@ -196,20 +206,25 @@ private fun SubjectCard(
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(UniSurface)
+            .border(1.dp, UniTextSecondary.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
             .clickable(onClick = onOpen)
             .padding(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
             modifier = Modifier
-                .size(14.dp)
-                .clip(CircleShape)
-                .background(Color(subject.colorArgb)),
-        )
+                .size(44.dp)
+                .clip(RoundedCornerShape(12.dp))
+                .background(Color(subject.colorArgb).copy(alpha = 0.12f)),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Icons.Default.MenuBook, null, tint = Color(subject.colorArgb), modifier = Modifier.size(24.dp)) }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             ContentText(
                 text = subject.name,
+                modifier = Modifier.fillMaxWidth(),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
                 style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(color = UniText),
             )
             Spacer(Modifier.height(4.dp))
@@ -249,6 +264,9 @@ private fun SubjectNameDialog(
                     value = value,
                     onValueChange = { value = it },
                     singleLine = true,
+                    textStyle = androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(
+                        textDirection = TextDirection.ContentOrLtr, textAlign = TextAlign.Start,
+                    ),
                     label = { Text("Subject name") },
                     isError = error != null,
                     supportingText = {

@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.sina.uninotes.camera.FlashMode
+import com.sina.uninotes.camera.CameraCaptureController
+import kotlinx.coroutines.CoroutineScope
 import com.sina.uninotes.data.local.db.PhotoEntity
 import com.sina.uninotes.data.repository.PhotoRepository
 import com.sina.uninotes.data.repository.SubjectRepository
@@ -32,6 +34,7 @@ class CameraViewModel(
     val subjectId: String,
     private val photoRepository: PhotoRepository,
     private val subjectRepository: SubjectRepository,
+    private val persistenceScope: CoroutineScope,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(CameraUiState())
     val ui: StateFlow<CameraUiState> = _ui.asStateFlow()
@@ -69,34 +72,27 @@ class CameraViewModel(
         _ui.update { it.copy(focusPoint = null) }
     }
 
-    fun onCaptureFileReady(tempFile: File) {
+    fun capture(controller: CameraCaptureController) {
         if (_ui.value.capturing) return
-        viewModelScope.launch {
-            _ui.update { it.copy(capturing = true, statusMessage = "Saving…", errorMessage = null) }
-            val bytes = withContext(Dispatchers.IO) { tempFile.readBytes() }
-            val retainedSubjectId = subjectId
-            photoRepository.saveCapturedPhoto(
-                subjectId = retainedSubjectId,
-                jpegBytes = bytes,
-            ).onSuccess {
-                subjectRepository.touchSubject(retainedSubjectId)
-                _ui.update {
-                    it.copy(
-                        capturing = false,
-                        statusMessage = "Saved",
-                        errorMessage = null,
-                    )
-                }
-            }.onFailure { error ->
-                _ui.update {
-                    it.copy(
-                        capturing = false,
-                        statusMessage = null,
-                        errorMessage = error.message ?: "Could not save photo",
-                    )
-                }
+        _ui.update { it.copy(capturing = true, statusMessage = "Capturing…", errorMessage = null) }
+        val capturedAt = System.currentTimeMillis()
+        persistenceScope.launch {
+            var pending: PhotoEntity? = null
+            try {
+                val photo = photoRepository.beginCapture(subjectId, capturedAt)
+                pending = photo
+                controller.takePicture(photoRepository.captureFile(photo)).getOrThrow()
+                _ui.update { it.copy(statusMessage = "Saving…") }
+                photoRepository.completeCapture(photo).getOrThrow()
+                pending = null
+                subjectRepository.touchSubject(subjectId)
+                _ui.update { it.copy(statusMessage = "Saved", errorMessage = null) }
+            } catch (error: Exception) {
+                pending?.let { runCatching { photoRepository.discardCapture(it) } }
+                reportError(error.message ?: "Could not save photo")
+            } finally {
+                _ui.update { it.copy(capturing = false) }
             }
-            withContext(Dispatchers.IO) { tempFile.delete() }
         }
     }
 
@@ -113,10 +109,11 @@ class CameraViewModel(
             subjectId: String,
             photoRepository: PhotoRepository,
             subjectRepository: SubjectRepository,
+            persistenceScope: CoroutineScope,
         ) = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                CameraViewModel(subjectId, photoRepository, subjectRepository) as T
+                CameraViewModel(subjectId, photoRepository, subjectRepository, persistenceScope) as T
         }
     }
 }

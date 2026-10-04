@@ -7,7 +7,12 @@ import androidx.camera.core.FocusMeteringAction
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.Preview
-import androidx.camera.core.SurfaceOrientedMeteringPointFactory
+import androidx.camera.core.AspectRatio
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
@@ -39,8 +44,13 @@ class CameraCaptureController(
     private var lensFacing = CameraSelector.LENS_FACING_BACK
     private val capturing = AtomicBoolean(false)
 
-    var capabilities: CameraCapabilities = CameraCapabilities(false, 1f, 1f, true)
-        private set
+    private val _capabilities = MutableStateFlow(CameraCapabilities(false, 1f, 1f, false))
+    val capabilityState = _capabilities.asStateFlow()
+    val capabilities: CameraCapabilities get() = _capabilities.value
+    private val _zoom = MutableStateFlow(1f)
+    val zoom = _zoom.asStateFlow()
+    private val _ready = MutableStateFlow(false)
+    val ready = _ready.asStateFlow()
 
     suspend fun bind(
         lifecycleOwner: LifecycleOwner,
@@ -51,10 +61,20 @@ class CameraCaptureController(
         cameraProvider = provider
         provider.unbindAll()
 
-        val preview = Preview.Builder().build().also {
+        _ready.value = false
+        val resolution = ResolutionSelector.Builder()
+            .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+            .build()
+        val preview = Preview.Builder().setResolutionSelector(resolution).build().also {
             it.surfaceProvider = previewView.surfaceProvider
         }
         imageCapture = ImageCapture.Builder()
+            .setResolutionSelector(ResolutionSelector.Builder()
+                .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+                .setAllowedResolutionMode(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+                .build())
+            .setJpegQuality(98)
+            .setTargetRotation(previewView.display?.rotation ?: android.view.Surface.ROTATION_0)
             .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
             .setFlashMode(flashMode.toImageCapture())
             .build()
@@ -63,20 +83,27 @@ class CameraCaptureController(
             .requireLensFacing(lensFacing)
             .build()
 
-        camera = provider.bindToLifecycle(lifecycleOwner, selector, preview, imageCapture)
+        val selected = if (provider.hasCamera(selector)) selector else {
+            lensFacing = CameraSelector.LENS_FACING_FRONT
+            CameraSelector.DEFAULT_FRONT_CAMERA
+        }
+        camera = provider.bindToLifecycle(lifecycleOwner, selected, preview, imageCapture)
         val cam = camera ?: return
         val zoomState = cam.cameraInfo.zoomState.value
-        capabilities = CameraCapabilities(
+        _capabilities.value = CameraCapabilities(
             hasFlash = cam.cameraInfo.hasFlashUnit(),
             minZoom = zoomState?.minZoomRatio ?: 1f,
             maxZoom = zoomState?.maxZoomRatio ?: 1f,
-            supportsFrontCamera = hasFrontCamera(provider),
+            supportsFrontCamera = hasFrontCamera(provider) && provider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA),
         )
+        cam.cameraInfo.zoomState.observe(lifecycleOwner) { state -> _zoom.value = state.zoomRatio }
+        _ready.value = true
         applyFlash(flashMode)
     }
 
     fun unbind() {
         cameraProvider?.unbindAll()
+        _ready.value = false
         camera = null
         imageCapture = null
     }
@@ -103,16 +130,12 @@ class CameraCaptureController(
     }
 
     fun applyFlash(mode: FlashMode) {
-        imageCapture?.flashMode = mode.toImageCapture()
+        imageCapture?.flashMode = if (capabilities.hasFlash) mode.toImageCapture() else ImageCapture.FLASH_MODE_OFF
     }
 
     fun tapToFocus(previewView: PreviewView, x: Float, y: Float) {
         val cam = camera ?: return
-        val factory = SurfaceOrientedMeteringPointFactory(
-            previewView.width.toFloat(),
-            previewView.height.toFloat(),
-        )
-        val point = factory.createPoint(x, y)
+        val point = previewView.meteringPointFactory.createPoint(x, y)
         val action = FocusMeteringAction.Builder(point, FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE)
             .setAutoCancelDuration(3, java.util.concurrent.TimeUnit.SECONDS)
             .build()
@@ -138,6 +161,7 @@ class CameraCaptureController(
             return Result.failure(IllegalStateException("Capture already in progress"))
         }
         return try {
+            outputFile.parentFile?.mkdirs()
             suspendCoroutine { cont ->
                 val options = ImageCapture.OutputFileOptions.Builder(outputFile).build()
                 capture.takePicture(
@@ -154,6 +178,8 @@ class CameraCaptureController(
                     },
                 )
             }
+        } catch (error: Exception) {
+            Result.failure(error)
         } finally {
             capturing.set(false)
         }

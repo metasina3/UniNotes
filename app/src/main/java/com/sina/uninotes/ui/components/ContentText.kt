@@ -33,7 +33,7 @@ fun ContentText(
             fontFamily = style.fontFamily ?: VazirmatnFamily,
             textDirection = TextDirection.ContentOrLtr,
         ),
-        textAlign = TextAlign.Unspecified,
+        textAlign = TextAlign.Start,
         maxLines = maxLines,
         overflow = overflow,
     )
@@ -47,10 +47,13 @@ fun ContentTextField(
     style: TextStyle = LocalTextStyle.current,
     singleLine: Boolean = false,
     hint: String = "",
+    readOnly: Boolean = false,
+    minLines: Int = 1,
 ) {
     val merged = style.copy(
         fontFamily = style.fontFamily ?: VazirmatnFamily,
         textDirection = TextDirection.ContentOrLtr,
+        textAlign = TextAlign.Start,
         color = style.color.takeIf { it != androidx.compose.ui.graphics.Color.Unspecified } ?: UniText,
     )
     BasicTextField(
@@ -59,6 +62,8 @@ fun ContentTextField(
         modifier = modifier,
         textStyle = merged,
         singleLine = singleLine,
+        readOnly = readOnly,
+        minLines = minLines,
         cursorBrush = SolidColor(UniText),
         decorationBox = { inner ->
             if (value.text.isEmpty() && hint.isNotEmpty()) {

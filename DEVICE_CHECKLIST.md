@@ -33,3 +33,14 @@
 - [ ] Malformed backup rejected
 - [ ] Low storage error is readable
 - [ ] App restart preserves data
+
+## Release install and Samsung verification
+
+- Install the complete signed release APK on Galaxy A53 and S21+; capture the exact error if rejected. Both use the universal APK's ARM64 libraries.
+- Do not confuse the old debug package with the release package. Export old content before deleting any installation.
+- Test an update signed with the same key; verify existing notes/photos survive.
+- In three-button and gesture navigation, confirm subject action buttons and camera shutter stay above the system navigation area.
+- Check status-bar icon contrast, camera controls in landscape, and large text settings.
+- Try permissions denial, return from Settings, front/rear switching, pinch zoom, focus taps near preview edges, flash changes, and background/resume.
+- Photograph a real whiteboard on the A53. Check saved JPEG sharpness/rotation and confirm it never appears in the system gallery.
+- Native-library alignment, APK signatures and emulated installs are automated checks, not proof of physical-camera quality or Samsung security-policy acceptance.

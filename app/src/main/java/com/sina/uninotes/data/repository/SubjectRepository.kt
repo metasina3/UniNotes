@@ -10,6 +10,10 @@ import com.sina.uninotes.data.local.db.UniNotesDatabase
 import com.sina.uninotes.data.local.files.PhotoStorage
 import com.sina.uninotes.util.Ids
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.withLock
+import com.sina.uninotes.data.LibraryAccess
 
 class SubjectRepository(
     private val subjectDao: SubjectDao,
@@ -18,11 +22,27 @@ class SubjectRepository(
     private val photoStorage: PhotoStorage,
     private val database: UniNotesDatabase? = null,
 ) {
+    suspend fun createSubject(name: String, colorArgb: Long): Result<SubjectEntity> = withContext(Dispatchers.IO) {
+        LibraryAccess.mutex.withLock { createSubjectUnlocked(name, colorArgb) }
+    }
+
+    suspend fun renameSubject(id: String, name: String): Result<Unit> = withContext(Dispatchers.IO) {
+        LibraryAccess.mutex.withLock { renameSubjectUnlocked(id, name) }
+    }
+
+    suspend fun deleteSubject(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        LibraryAccess.mutex.withLock { deleteSubjectUnlocked(id) }
+    }
+
+    suspend fun touchSubject(id: String): Unit = withContext(Dispatchers.IO) {
+        LibraryAccess.mutex.withLock { touchSubjectUnlocked(id) }
+    }
+
     fun observeSubjects(): Flow<List<SubjectWithCounts>> = subjectDao.observeSubjectsWithCounts()
 
     fun observeSubject(id: String): Flow<SubjectEntity?> = subjectDao.observeById(id)
 
-    suspend fun createSubject(name: String, colorArgb: Long): Result<SubjectEntity> {
+    private suspend fun createSubjectUnlocked(name: String, colorArgb: Long): Result<SubjectEntity> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("Subject name cannot be blank"))
         val now = System.currentTimeMillis()
@@ -40,7 +60,7 @@ class SubjectRepository(
         }
     }
 
-    suspend fun renameSubject(id: String, name: String): Result<Unit> {
+    private suspend fun renameSubjectUnlocked(id: String, name: String): Result<Unit> {
         val trimmed = name.trim()
         if (trimmed.isEmpty()) return Result.failure(IllegalArgumentException("Subject name cannot be blank"))
         val existing = subjectDao.getById(id)
@@ -55,7 +75,7 @@ class SubjectRepository(
         }
     }
 
-    suspend fun deleteSubject(id: String): Result<Unit> = runCatching {
+    private suspend fun deleteSubjectUnlocked(id: String): Result<Unit> = runCatching {
         val db = database
         if (db != null) {
             db.withTransaction {
@@ -71,7 +91,7 @@ class SubjectRepository(
         photoStorage.deleteSubjectFiles(id)
     }
 
-    suspend fun touchSubject(id: String) {
+    private suspend fun touchSubjectUnlocked(id: String) {
         val existing = subjectDao.getById(id) ?: return
         subjectDao.update(existing.copy(updatedAtEpochMs = System.currentTimeMillis()))
     }

@@ -41,9 +41,8 @@ class PhotoStorage(context: Context) {
     }
 
     fun deletePhotoFiles(subjectId: String, photoId: String) {
-        originalFile(subjectId, photoId).delete()
-        thumbnailFile(subjectId, photoId).delete()
-        tempFile(subjectId, photoId).delete()
+        listOf(originalFile(subjectId, photoId), thumbnailFile(subjectId, photoId), tempFile(subjectId, photoId))
+            .forEach { file -> if (file.exists() && !file.delete()) throw IOException("Could not delete photo file") }
     }
 
     fun finalizeTemp(temp: File, destination: File) {

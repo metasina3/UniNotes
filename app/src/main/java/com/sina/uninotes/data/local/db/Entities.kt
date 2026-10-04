@@ -77,6 +77,7 @@ object PhotoStatus {
     const val PENDING = "PENDING"
     const val READY = "READY"
     const val FAILED = "FAILED"
+    const val DELETING = "DELETING"
 }
 
 data class SubjectWithCounts(

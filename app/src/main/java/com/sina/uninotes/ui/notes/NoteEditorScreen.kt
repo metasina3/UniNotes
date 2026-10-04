@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -27,6 +28,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -53,14 +55,14 @@ fun NoteEditorScreen(
     onBack: () -> Unit,
 ) {
     val ui by viewModel.ui.collectAsStateWithLifecycle()
-    var titleValue by remember { mutableStateOf(TextFieldValue()) }
-    var bodyValue by remember { mutableStateOf(TextFieldValue()) }
+    var titleValue by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var bodyValue by rememberSaveable(stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
 
     LaunchedEffect(ui.ready, ui.noteId) {
         if (!ui.ready) return@LaunchedEffect
-        titleValue = TextFieldValue(ui.title, TextRange(ui.title.length))
+        if (titleValue.text != ui.title) titleValue = TextFieldValue(ui.title, TextRange(ui.title.length))
         val selection = if (ui.placeCursorAtEnd) TextRange(ui.body.length) else TextRange(ui.body.length)
-        bodyValue = TextFieldValue(ui.body, selection)
+        if (bodyValue.text != ui.body) bodyValue = TextFieldValue(ui.body, selection)
         if (ui.placeCursorAtEnd) viewModel.consumeCursorRequest()
     }
 
@@ -130,10 +132,17 @@ fun NoteEditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp),
         ) {
+            ui.error?.let { error ->
+                Text(error, color = UniAccent)
+                TextButton(onClick = { if (ui.ready) viewModel.persistNow() else viewModel.retryLoad() }) {
+                    Text("Retry")
+                }
+            }
             ContentTextField(
                 value = titleValue,
                 onValueChange = {
@@ -142,6 +151,7 @@ fun NoteEditorScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                readOnly = !ui.ready,
                 hint = "Optional title",
                 style = androidx.compose.material3.MaterialTheme.typography.titleLarge.copy(color = UniText),
             )
@@ -153,8 +163,9 @@ fun NoteEditorScreen(
                     viewModel.onBodyChange(it.text)
                 },
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .height(420.dp),
+                    .fillMaxWidth(),
+                minLines = 12,
+                readOnly = !ui.ready,
                 hint = "Write today’s note…",
                 style = androidx.compose.material3.MaterialTheme.typography.bodyLarge.copy(color = UniText),
             )

@@ -10,6 +10,9 @@ import androidx.lifecycle.viewmodel.viewModelFactory
 import com.sina.uninotes.data.repository.NoteRepository
 import com.sina.uninotes.data.repository.SubjectRepository
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,12 +41,16 @@ class NoteEditorViewModel(
     private val noteRepository: NoteRepository,
     private val subjectRepository: SubjectRepository,
     private val savedStateHandle: SavedStateHandle,
+    private val persistenceScope: CoroutineScope,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(NoteEditorUiState())
     val ui: StateFlow<NoteEditorUiState> = _ui.asStateFlow()
 
     private var saveJob: Job? = null
     private var lastKnownUpdatedAt: Long? = null
+    private val saveMutex = Mutex()
+    private var revision = 0L
+    private var deleted = false
 
     private var loadedNoteId: String?
         get() = savedStateHandle["noteId"]
@@ -64,14 +71,22 @@ class NoteEditorViewModel(
         }
 
     init {
-        viewModelScope.launch { load() }
+        retryLoad()
+    }
+
+    fun retryLoad() {
+        viewModelScope.launch {
+            runCatching { load() }.onFailure { error ->
+                _ui.update { it.copy(error = error.message ?: "Could not open note") }
+            }
+        }
     }
 
     private suspend fun load() {
         val subjectName = subjectRepository.getSubject(subjectId)?.name.orEmpty()
         val existingId = initialNoteId ?: loadedNoteId
         val note = if (!existingId.isNullOrBlank()) {
-            noteRepository.getNote(existingId)
+            noteRepository.getNote(existingId)?.takeIf { it.subjectId == subjectId }
                 ?: noteRepository.openOrCreateTodayNote(subjectId)
         } else {
             noteRepository.openOrCreateTodayNote(subjectId)
@@ -93,12 +108,16 @@ class NoteEditorViewModel(
     }
 
     fun onTitleChange(title: String) {
+        if (!_ui.value.ready || deleted) return
+        revision++
         draftTitle = title
         _ui.update { it.copy(title = title, placeCursorAtEnd = false) }
         scheduleSave()
     }
 
     fun onBodyChange(body: String) {
+        if (!_ui.value.ready || deleted) return
+        revision++
         draftBody = body
         _ui.update { it.copy(body = body, placeCursorAtEnd = false) }
         scheduleSave()
@@ -113,17 +132,19 @@ class NoteEditorViewModel(
         saveJob = viewModelScope.launch {
             _ui.update { it.copy(saveStatus = SaveStatus.Saving) }
             delay(400)
-            persistNowSuspend()
+            persistNow()
         }
     }
 
     fun persistNow() {
-        viewModelScope.launch { persistNowSuspend() }
+        persistenceScope.launch { persistNowSuspend() }
     }
 
-    suspend fun persistNowSuspend() {
+    suspend fun persistNowSuspend() = saveMutex.withLock {
+        if (deleted) return@withLock
         val state = _ui.value
-        val noteId = state.noteId ?: return
+        val noteId = state.noteId ?: return@withLock
+        val savingRevision = revision
         _ui.update { it.copy(saveStatus = SaveStatus.Saving) }
         noteRepository.saveNoteContent(
             noteId = noteId,
@@ -132,28 +153,34 @@ class NoteEditorViewModel(
             expectedUpdatedAt = lastKnownUpdatedAt,
         ).onSuccess { saved ->
             lastKnownUpdatedAt = saved.updatedAtEpochMs
-            subjectRepository.touchSubject(subjectId)
-            _ui.update { current ->
-                current.copy(saveStatus = SaveStatus.Saved, error = null)
-            }
-        }.onFailure { error ->
+            val matches = saved.title == state.title.trim() && saved.body == state.body
             _ui.update { current ->
                 current.copy(
-                    saveStatus = SaveStatus.Failed,
-                    error = error.message ?: "Save failed",
+                    saveStatus = when {
+                        !matches -> SaveStatus.Failed
+                        revision != savingRevision -> SaveStatus.Saving
+                        else -> SaveStatus.Saved
+                    },
+                    error = if (matches) null else "The note changed elsewhere. Reopen it before editing.",
                 )
+            }
+            subjectRepository.touchSubject(subjectId)
+        }.onFailure { error ->
+            _ui.update { current ->
+                current.copy(saveStatus = SaveStatus.Failed, error = error.message ?: "Save failed")
             }
         }
     }
 
     fun onLeaveScreen() {
         saveJob?.cancel()
-        viewModelScope.launch {
+        // Application scope survives the navigation entry and its ViewModel being removed.
+        persistenceScope.launch {
             persistNowSuspend()
-            val state = _ui.value
-            val noteId = state.noteId ?: return@launch
-            if (state.title.isBlank() && state.body.isBlank()) {
-                noteRepository.deleteEmptyPlaceholder(noteId)
+            saveMutex.withLock {
+                if (!deleted && _ui.value.title.isBlank() && _ui.value.body.isBlank()) {
+                    _ui.value.noteId?.let { noteRepository.deleteEmptyPlaceholder(it) }
+                }
             }
         }
     }
@@ -167,11 +194,18 @@ class NoteEditorViewModel(
     }
 
     fun confirmDelete(onDeleted: () -> Unit) {
-        viewModelScope.launch {
-            val noteId = _ui.value.noteId ?: return@launch
-            noteRepository.deleteNote(noteId)
-            _ui.update { it.copy(deleteConfirm = false) }
-            onDeleted()
+        saveJob?.cancel()
+        persistenceScope.launch {
+            saveMutex.withLock {
+                val noteId = _ui.value.noteId ?: return@withLock
+                noteRepository.deleteNote(noteId).onSuccess {
+                    deleted = true
+                    _ui.update { it.copy(deleteConfirm = false) }
+                    onDeleted()
+                }.onFailure { error ->
+                    _ui.update { it.copy(deleteConfirm = false, error = error.message ?: "Delete failed") }
+                }
+            }
         }
     }
 
@@ -181,6 +215,7 @@ class NoteEditorViewModel(
             noteId: String?,
             noteRepository: NoteRepository,
             subjectRepository: SubjectRepository,
+            persistenceScope: CoroutineScope,
         ): ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 NoteEditorViewModel(
@@ -189,6 +224,7 @@ class NoteEditorViewModel(
                     noteRepository = noteRepository,
                     subjectRepository = subjectRepository,
                     savedStateHandle = createSavedStateHandle(),
+                    persistenceScope = persistenceScope,
                 )
             }
         }

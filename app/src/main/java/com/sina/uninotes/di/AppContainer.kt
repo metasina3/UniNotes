@@ -9,8 +9,12 @@ import com.sina.uninotes.data.local.files.ThumbnailGenerator
 import com.sina.uninotes.data.repository.NoteRepository
 import com.sina.uninotes.data.repository.PhotoRepository
 import com.sina.uninotes.data.repository.SubjectRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 
 class AppContainer(context: Context) {
+    val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val appContext = context.applicationContext
 
     val database: UniNotesDatabase = Room.databaseBuilder(

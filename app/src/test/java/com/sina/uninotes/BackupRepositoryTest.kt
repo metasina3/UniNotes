@@ -18,11 +18,13 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.io.File
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [28])
 class BackupRepositoryTest {
     private lateinit var context: Context
     private lateinit var db: UniNotesDatabase
@@ -110,4 +112,37 @@ class BackupRepositoryTest {
         val result = backup.importBackup(Uri.fromFile(bad))
         assertThat(result.isFailure).isTrue()
     }
+    @Test
+    fun malformedBackupPreservesExistingLibrary() = runBlocking {
+        db.subjectDao().insert(SubjectEntity("keep", "Existing", 0xFF3195FF, 1, 1))
+        val original = storage.originalFile("keep", "photo")
+        original.writeText("original")
+        val bad = File(context.cacheDir, "invalid.zip")
+        ZipOutputStream(bad.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("manifest.json"))
+            zip.write("{}".toByteArray())
+            zip.closeEntry()
+        }
+        assertThat(backup.importBackup(Uri.fromFile(bad)).isFailure).isTrue()
+        assertThat(db.subjectDao().getById("keep")?.name).isEqualTo("Existing")
+        assertThat(original.readText()).isEqualTo("original")
+    }
+
+    @Test
+    fun interruptedRestoreRecoversPreviousFiles() = runBlocking {
+        db.subjectDao().insert(SubjectEntity("keep", "Existing", 0xFF3195FF, 1, 1))
+        storage.originalFile("keep", "photo").writeText("original")
+        val live = File(context.filesDir, "subjects")
+        val old = File(context.filesDir, "restore-old")
+        old.deleteRecursively()
+        check(live.renameTo(old))
+        live.mkdirs()
+        File(context.filesDir, "restore-state.json").writeText(
+            """{"expectedFingerprint":"uncommitted-new-library"}""",
+        )
+        backup.recoverRestore()
+        assertThat(storage.originalFile("keep", "photo").readText()).isEqualTo("original")
+        assertThat(old.exists()).isFalse()
+    }
+
 }

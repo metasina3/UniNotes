@@ -17,6 +17,7 @@ class UniNotesApp : Application() {
         super.onCreate()
         container = AppContainer(this)
         applicationScope.launch {
+            container.backupRepository.recoverRestore()
             container.photoRepository.recoverInterruptedCaptures()
         }
     }

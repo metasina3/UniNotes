@@ -8,19 +8,37 @@ plugins {
 android {
     namespace = "com.sina.uninotes"
     compileSdk = 36
+    buildToolsVersion = "36.0.0"
 
     defaultConfig {
         applicationId = "com.sina.uninotes"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = providers.gradleProperty("uninotesVersionCode").orElse("2").get().toInt()
+        versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
 
+    val releaseStore = System.getenv("UNINOTES_KEYSTORE_PATH")
+    signingConfigs {
+        if (!releaseStore.isNullOrBlank()) {
+            create("personalRelease") {
+                storeFile = file(releaseStore)
+                storePassword = System.getenv("UNINOTES_STORE_PASSWORD")
+                keyAlias = System.getenv("UNINOTES_KEY_ALIAS") ?: "uninotes"
+                keyPassword = System.getenv("UNINOTES_KEY_PASSWORD")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
+            isDebuggable = false
+            if (!releaseStore.isNullOrBlank()) signingConfig = signingConfigs.getByName("personalRelease")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -31,6 +49,12 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
+    }
+
+    // One complete APK includes phone and emulator ABIs; no split-only installation.
+    splits {
+        abi { isEnable = false }
+        density { isEnable = false }
     }
 
     compileOptions {
@@ -55,6 +79,9 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            it.systemProperty("robolectric.enabledSdks", "28")
+        }
     }
 
     lint {

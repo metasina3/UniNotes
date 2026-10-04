@@ -1,6 +1,16 @@
 package com.sina.uninotes.ui.camera
 
 import android.Manifest
+import android.app.Activity
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.ui.unit.IntOffset
+import kotlin.math.roundToInt
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.heightIn
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -85,6 +95,9 @@ fun CameraScreen(
     val latest by viewModel.latestPhoto.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val controller = remember { CameraCaptureController(context) }
+    val capabilities by controller.capabilityState.collectAsStateWithLifecycle()
+    val zoomRatio by controller.zoom.collectAsStateWithLifecycle()
+    val cameraReady by controller.ready.collectAsStateWithLifecycle()
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
     var rebindKey by remember { mutableStateOf(0) }
     var permissionGranted by remember {
@@ -98,18 +111,33 @@ fun CameraScreen(
         ActivityResultContracts.RequestPermission(),
     ) { granted ->
         permissionGranted = granted
-        permanentlyDenied = !granted
+        permanentlyDenied = !granted && (context as? Activity)?.let {
+            !ActivityCompat.shouldShowRequestPermissionRationale(it, Manifest.permission.CAMERA)
+        } == true
     }
 
     LaunchedEffect(Unit) {
         if (!permissionGranted) permissionLauncher.launch(Manifest.permission.CAMERA)
     }
 
-    LaunchedEffect(permissionGranted, previewView, ui.flashMode, rebindKey) {
+    LaunchedEffect(permissionGranted, previewView, rebindKey) {
         val pv = previewView ?: return@LaunchedEffect
         if (!permissionGranted) return@LaunchedEffect
         runCatching { controller.bind(lifecycleOwner, pv, ui.flashMode) }
-        viewModel.updateZoom(controller.currentZoom())
+            .onFailure { viewModel.reportError(it.message ?: "Camera unavailable") }
+    }
+
+    LaunchedEffect(ui.flashMode) { controller.applyFlash(ui.flashMode) }
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                permissionGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     DisposableEffect(Unit) {
@@ -151,21 +179,23 @@ fun CameraScreen(
         AndroidView(
             factory = { ctx ->
                 PreviewView(ctx).also { pv ->
-                    pv.scaleType = PreviewView.ScaleType.FILL_CENTER
+                    pv.scaleType = PreviewView.ScaleType.FIT_CENTER
                     previewView = pv
+                    var multiTouch = false
                     val detector = ScaleGestureDetector(
                         ctx,
                         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
                             override fun onScale(detector: ScaleGestureDetector): Boolean {
                                 controller.setZoomRatio(controller.currentZoom() * detector.scaleFactor)
-                                viewModel.updateZoom(controller.currentZoom())
                                 return true
                             }
                         },
                     )
                     pv.setOnTouchListener { _, event ->
+                        if (event.actionMasked == MotionEvent.ACTION_DOWN) multiTouch = false
+                        if (event.pointerCount > 1) multiTouch = true
                         detector.onTouchEvent(event)
-                        if (event.action == MotionEvent.ACTION_UP && !detector.isInProgress) {
+                        if (event.actionMasked == MotionEvent.ACTION_UP && !multiTouch) {
                             controller.tapToFocus(pv, event.x, event.y)
                             viewModel.showFocus(event.x, event.y)
                         }
@@ -183,8 +213,8 @@ fun CameraScreen(
             ) {
                 Box(
                     modifier = Modifier
-                        .padding(start = with(androidx.compose.ui.platform.LocalDensity.current) { x.toDp() } - 24.dp)
-                        .padding(top = with(androidx.compose.ui.platform.LocalDensity.current) { y.toDp() } - 24.dp)
+                        .offset { IntOffset((x - 24.dp.toPx()).roundToInt().coerceAtLeast(0),
+                            (y - 24.dp.toPx()).roundToInt().coerceAtLeast(0)) }
                         .size(48.dp)
                         .border(2.dp, UniAccent, RoundedCornerShape(8.dp)),
                 )
@@ -195,7 +225,8 @@ fun CameraScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(12.dp),
+                .background(Color.Black.copy(alpha = 0.55f))
+                .padding(8.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = onBack) {
@@ -206,7 +237,7 @@ fun CameraScreen(
                     style = androidx.compose.material3.MaterialTheme.typography.titleMedium.copy(color = Color.White),
                     modifier = Modifier.weight(1f),
                 )
-                if (controller.capabilities.hasFlash) {
+                if (capabilities.hasFlash) {
                     IconButton(onClick = { viewModel.cycleFlash(true) }) {
                         Icon(
                             imageVector = when (ui.flashMode) {
@@ -219,7 +250,7 @@ fun CameraScreen(
                         )
                     }
                 }
-                if (controller.capabilities.supportsFrontCamera) {
+                if (capabilities.supportsFrontCamera) {
                     IconButton(onClick = {
                         controller.switchCamera()
                         rebindKey++
@@ -229,22 +260,22 @@ fun CameraScreen(
                 }
             }
             Text(
-                text = String.format("%.1fx", ui.zoomRatio),
+                text = String.format(java.util.Locale.ENGLISH, "%.1fx", zoomRatio),
                 color = Color.White,
                 modifier = Modifier.padding(start = 16.dp),
             )
-            if (controller.capabilities.maxZoom >= 2f) {
+            if (capabilities.maxZoom >= 2f) {
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(start = 4.dp),
                 ) {
                     TextButton(onClick = {
                         controller.setZoomRatio(1f)
-                        viewModel.updateZoom(1f)
+
                     }) { Text("1x", color = Color.White) }
                     TextButton(onClick = {
-                        controller.setZoomRatio(minOf(2f, controller.capabilities.maxZoom))
-                        viewModel.updateZoom(controller.currentZoom())
+                        controller.setZoomRatio(minOf(2f, capabilities.maxZoom))
+
                     }) { Text("2x", color = Color.White) }
                 }
             }
@@ -267,11 +298,14 @@ fun CameraScreen(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(24.dp),
+                .background(Color.Black.copy(alpha = 0.75f))
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp, vertical = 16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             ui.statusMessage?.let { Text(it, color = Color.White) }
             ui.errorMessage?.let { Text(it, color = UniAccent) }
+            Text("Saves to this subject", color = UniTextSecondary)
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -299,19 +333,7 @@ fun CameraScreen(
                         .size(84.dp)
                         .clip(CircleShape)
                         .background(Color.White)
-                        .clickable(enabled = !ui.capturing) {
-                            scope.launch {
-                                val temp = File(context.cacheDir, "capture-${UUID.randomUUID()}.jpg")
-                                controller.takePicture(temp).fold(
-                                    onSuccess = { viewModel.onCaptureFileReady(it) },
-                                    onFailure = { error ->
-                                        if (error.message != "Capture already in progress") {
-                                            viewModel.reportError(error.message ?: "Capture failed")
-                                        }
-                                    },
-                                )
-                            }
-                        },
+                        .clickable(enabled = cameraReady && !ui.capturing) { viewModel.capture(controller) },
                     contentAlignment = Alignment.Center,
                 ) {
                     if (ui.capturing) {
@@ -341,6 +363,7 @@ private fun PermissionPane(
         modifier = Modifier
             .fillMaxSize()
             .background(UniBackground)
+            .safeDrawingPadding()
             .padding(24.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,

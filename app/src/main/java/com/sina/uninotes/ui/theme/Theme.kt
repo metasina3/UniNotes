@@ -1,6 +1,5 @@
 package com.sina.uninotes.ui.theme
 
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
@@ -33,7 +32,4 @@ fun UniNotesTheme(content: @Composable () -> Unit) {
             content = content,
         )
     }
-    // Suppress unused warning for isSystemInDarkTheme if tooling inspects it.
-    @Suppress("UNUSED_EXPRESSION")
-    isSystemInDarkTheme()
 }

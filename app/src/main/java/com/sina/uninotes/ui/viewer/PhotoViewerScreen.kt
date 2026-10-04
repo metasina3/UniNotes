@@ -3,7 +3,16 @@ package com.sina.uninotes.ui.viewer
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateZoom
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.runtime.saveable.rememberSaveable
+import kotlin.math.abs
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -57,13 +66,18 @@ fun PhotoViewerScreen(
     val startIndex = photos.indexOfFirst { it.id == initialPhotoId }.coerceAtLeast(0)
     val pagerState = rememberPagerState(initialPage = startIndex, pageCount = { photos.size.coerceAtLeast(1) })
     var deleteTarget by remember { mutableStateOf<PhotoEntity?>(null) }
+    var zoomed by remember { mutableStateOf(false) }
+    var openedInitial by rememberSaveable { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
 
     LaunchedEffect(photos, initialPhotoId) {
         val idx = photos.indexOfFirst { it.id == initialPhotoId }
-        if (idx >= 0 && pagerState.currentPage != idx) {
+        if (!openedInitial && idx >= 0) {
             pagerState.scrollToPage(idx)
+            openedInitial = true
         }
+        zoomed = false
     }
 
     Box(
@@ -77,16 +91,20 @@ fun PhotoViewerScreen(
             HorizontalPager(
                 state = pagerState,
                 modifier = Modifier.fillMaxSize(),
-                userScrollEnabled = true,
+                userScrollEnabled = !zoomed,
             ) { page ->
-                val photo = photos[page]
+                val photo = photos.getOrNull(page) ?: return@HorizontalPager
                 ZoomablePhoto(
                     model = photoRepository.resolveFile(photo.relativePath),
-                    onZoomingChanged = { /* pager scroll conflict handled by scale gate */ },
+                    onZoomingChanged = { if (page == pagerState.currentPage) zoomed = it },
                 )
             }
         }
 
+        error?.let {
+            Text(it, color = com.sina.uninotes.ui.theme.UniAccent,
+                modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(24.dp))
+        }
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -128,8 +146,10 @@ fun PhotoViewerScreen(
                     onClick = {
                         scope.launch {
                             photoRepository.deletePhoto(photo.id)
-                            deleteTarget = null
-                            if (photos.size <= 1) onBack()
+                                .onSuccess {
+                                    deleteTarget = null
+                                    if (photos.size <= 1) onBack()
+                                }.onFailure { error = it.message ?: "Could not delete photo"; deleteTarget = null }
                         }
                     },
                 ) { Text("Delete") }
@@ -146,13 +166,20 @@ private fun ZoomablePhoto(
     model: Any,
     onZoomingChanged: (Boolean) -> Unit,
 ) {
-    var scale by remember { mutableFloatStateOf(1f) }
-    var offset by remember { mutableStateOf(Offset.Zero) }
+    var scale by remember(model) { mutableFloatStateOf(1f) }
+    var offset by remember(model) { mutableStateOf(Offset.Zero) }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    fun clamp(value: Offset, zoom: Float): Offset {
+        val x = size.width * (zoom - 1f) / 2f
+        val y = size.height * (zoom - 1f) / 2f
+        return Offset(value.x.coerceIn(-x, x), value.y.coerceIn(-y, y))
+    }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(Unit) {
+            .onSizeChanged { size = it }
+            .pointerInput(model) {
                 detectTapGestures(
                     onDoubleTap = {
                         if (scale > 1.01f) {
@@ -166,12 +193,23 @@ private fun ZoomablePhoto(
                     },
                 )
             }
-            .pointerInput(Unit) {
-                detectTransformGestures { _, pan, zoom, _ ->
-                    val newScale = (scale * zoom).coerceIn(1f, 5f)
-                    scale = newScale
-                    offset = if (newScale == 1f) Offset.Zero else offset + pan
-                    onZoomingChanged(newScale > 1.01f)
+            .pointerInput(model) {
+                awaitEachGesture {
+                    awaitFirstDown(requireUnconsumed = false)
+                    do {
+                        val event = awaitPointerEvent()
+                        val multiTouch = event.changes.count { it.pressed } > 1
+                        if (multiTouch || scale > 1.01f) {
+                            val zoom = event.calculateZoom()
+                            val newScale = (scale * zoom).coerceIn(1f, 6f)
+                            val centroid = event.calculateCentroid(useCurrent = false) - Offset(size.width / 2f, size.height / 2f)
+                            offset = if (newScale <= 1.01f) Offset.Zero else
+                                clamp((offset - centroid) * (newScale / scale) + centroid + event.calculatePan(), newScale)
+                            scale = newScale
+                            event.changes.forEach { it.consume() }
+                            onZoomingChanged(newScale > 1.01f)
+                        }
+                    } while (event.changes.any { it.pressed })
                 }
             },
         contentAlignment = Alignment.Center,
