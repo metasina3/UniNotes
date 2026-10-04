@@ -1,6 +1,7 @@
 package com.sina.uninotes
 
 import android.graphics.Bitmap
+import android.Manifest
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.semantics.SemanticsActions
@@ -10,6 +11,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.room.withTransaction
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.test.rule.GrantPermissionRule
+import com.sina.uninotes.data.local.db.PhotoStatus
 import com.google.common.truth.Truth.assertThat
 import kotlinx.coroutines.runBlocking
 import org.junit.Before
@@ -19,6 +22,7 @@ import java.io.File
 
 class AppSmokeTest {
     @get:Rule val rule = createAndroidComposeRule<MainActivity>()
+    @get:Rule val cameraPermission: GrantPermissionRule = GrantPermissionRule.grant(Manifest.permission.CAMERA)
     private val container get() = (rule.activity.application as UniNotesApp).container
 
     @Before fun cleanLibrary() = runBlocking {
@@ -97,5 +101,40 @@ class AppSmokeTest {
         }
         assertThat(runBlocking { container.database.noteDao().getAll().size }).isEqualTo(1)
         capture("mixed-language-editor")
+    }
+
+    @Test fun cameraCaptureSavesOriginalAndThumbnailToSelectedSubject() {
+        openSubject()
+        val subject = runBlocking { container.database.subjectDao().getAll().single() }
+        rule.onNodeWithText("Camera").performClick()
+        rule.waitUntil(60000) {
+            rule.onAllNodes(hasContentDescription("Take photo") and isEnabled())
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        capture("camera")
+        rule.onNodeWithContentDescription("Take photo").performClick()
+        rule.waitUntil(30000) {
+            runBlocking { container.photoRepository.getReadyForSubject(subject.id).size == 1 }
+        }
+        val photo = runBlocking { container.photoRepository.getReadyForSubject(subject.id).single() }
+        assertThat(photo.subjectId).isEqualTo(subject.id)
+        assertThat(photo.status).isEqualTo(PhotoStatus.READY)
+        assertThat(photo.width).isGreaterThan(0)
+        assertThat(photo.height).isGreaterThan(0)
+        val original = container.photoRepository.resolveFile(photo.relativePath)
+        assertThat(original.exists()).isTrue()
+        assertThat(original.length()).isGreaterThan(0L)
+        assertThat(original.canonicalPath.startsWith(rule.activity.filesDir.canonicalPath + "/")).isTrue()
+        assertThat(photo.thumbnailRelativePath).isNotNull()
+        assertThat(container.photoRepository.resolveFile(photo.thumbnailRelativePath!!).exists()).isTrue()
+        rule.onNodeWithContentDescription("Back").performClick()
+        rule.waitUntil(10000) {
+            rule.onAllNodesWithContentDescription("Photo taken ${photo.localDate}")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+        rule.onNodeWithText("Today").assertIsDisplayed()
+        capture("gallery-with-photo")
+        rule.onNodeWithContentDescription("Photo taken ${photo.localDate}").performClick()
+        capture("photo-viewer")
     }
 }

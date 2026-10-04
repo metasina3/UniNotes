@@ -63,6 +63,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
@@ -333,6 +335,7 @@ fun CameraScreen(
                         .size(84.dp)
                         .clip(CircleShape)
                         .background(Color.White)
+                        .semantics { contentDescription = "Take photo" }
                         .clickable(enabled = cameraReady && !ui.capturing) { viewModel.capture(controller) },
                     contentAlignment = Alignment.Center,
                 ) {
