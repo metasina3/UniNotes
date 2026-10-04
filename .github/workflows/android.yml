@@ -17,6 +17,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -38,8 +40,12 @@ jobs:
           KEY_PASSWORD: ${{ secrets.UNINOTES_KEY_PASSWORD }}
         run: |
           if [ -n "$KEYSTORE_BASE64" ]; then
-            test -n "$STORE_PASSWORD" && test -n "$KEY_PASSWORD"
+            if [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ]; then
+              echo "::error::UNINOTES_STORE_PASSWORD and UNINOTES_KEY_PASSWORD are required when the keystore secret is set."
+              exit 1
+            fi
             printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/uninotes.jks"
+            chmod 600 "$RUNNER_TEMP/uninotes.jks"
             echo "UNINOTES_KEYSTORE_PATH=$RUNNER_TEMP/uninotes.jks" >> "$GITHUB_ENV"
             echo 'signed=true' >> "$GITHUB_OUTPUT"
           else
@@ -50,7 +56,7 @@ jobs:
         env:
           UNINOTES_STORE_PASSWORD: ${{ secrets.UNINOTES_STORE_PASSWORD }}
           UNINOTES_KEY_PASSWORD: ${{ secrets.UNINOTES_KEY_PASSWORD }}
-          UNINOTES_KEY_ALIAS: uninotes
+          UNINOTES_KEY_ALIAS: ${{ secrets.UNINOTES_KEY_ALIAS || 'uninotes' }}
         run: |
           chmod +x gradlew
           ./gradlew :app:assembleRelease :app:assembleDebug :app:assembleDebugAndroidTest :app:testDebugUnitTest :app:lintDebug :app:lintRelease -PuninotesVersionCode=$((1000 + GITHUB_RUN_NUMBER)) --stacktrace
@@ -58,6 +64,7 @@ jobs:
         if: steps.signing.outputs.signed == 'true'
         run: |
           "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
+          "$ANDROID_HOME/build-tools/36.0.0/zipalign" -c -P 16 4 app/build/outputs/apk/release/app-release.apk
           python3 scripts/check_apk.py app/build/outputs/apk/release/app-release.apk
       - name: Check unsigned release structure
         if: steps.signing.outputs.signed != 'true'
@@ -65,7 +72,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ steps.signing.outputs.signed == 'true' && 'signed' || 'unsigned-for-local-signing' }}
-          path: app/build/outputs/apk/release/*.apk
+          path: |
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/output-metadata.json
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
@@ -100,6 +109,12 @@ jobs:
         with:
           name: emulator-apks
           path: apks
+      - name: Download signed release for installation check
+        if: needs.build.outputs.signed == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: release-signed
+          path: release-apks
       - name: Enable KVM
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -120,3 +135,38 @@ jobs:
         with:
           name: device-evidence-api-${{ matrix.api }}
           path: device-evidence/
+
+  publish:
+    needs: [build, device-checks]
+    if: github.ref == 'refs/heads/main' && needs.build.outputs.signed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-signed
+          path: release
+      - name: Publish tested signed APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(jq -r '.elements[0].versionName' release/output-metadata.json)
+          tag="android-ci-$GITHUB_RUN_NUMBER"
+          asset="DinoNotes-$version-build-$GITHUB_RUN_NUMBER-universal.apk"
+          cp release/app-release.apk "$asset"
+          sha256sum "$asset" > "$asset.sha256"
+          cat > release-notes.md <<EOF
+          Built from commit $GITHUB_SHA by GitHub Actions.
+          Universal signed APK for Android 8.0 and newer.
+          Unit tests, lint, native-library alignment and Android 10/15/16 checks passed.
+          Workflow: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          if gh release view "$tag" > /dev/null 2>&1; then
+            gh release upload "$tag" "$asset" "$asset.sha256" --clobber
+          else
+            gh release create "$tag" "$asset" "$asset.sha256" --target "$GITHUB_SHA" --title "DinoNotes $version - Actions build $GITHUB_RUN_NUMBER" --notes-file release-notes.md --prerelease --latest=false
+          fi
+          echo "Signed download: https://github.com/$GITHUB_REPOSITORY/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"

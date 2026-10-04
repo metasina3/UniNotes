@@ -50,8 +50,29 @@ For automatic stable release signing, configure these **Actions repository secre
 - `UNINOTES_KEYSTORE_BASE64`: Base64 of the private keystore.
 - `UNINOTES_STORE_PASSWORD`.
 - `UNINOTES_KEY_PASSWORD`.
+- `UNINOTES_KEY_ALIAS`: the alias used by Android Studio (optional; defaults to `uninotes`).
 
-The alias is `uninotes`. Without these secrets, the workflow deliberately labels the release artifact `unsigned-for-local-signing`. Do not distribute that unsigned file. Sign it privately with the same key, using `scripts/sign-release.py`.
+Use the **same existing keystore** that signed the working Android Studio release. Find its path and alias in your local `keystore.properties` or Android Studio's signed APK dialog. Do not generate a new key for an update.
+
+In [repository Actions secrets](https://github.com/metasina3/UniNotes/settings/secrets/actions), add the Base64-encoded keystore and the two passwords as repository secrets. The keystore is binary, so encode the complete `.jks`/`.keystore` file, not its path. On Windows, this copies its Base64 to the clipboard without printing it:
+
+```powershell
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\existing-release.jks")) | Set-Clipboard
+```
+
+On Linux, save the encoded value to a temporary file, then copy its contents into the secret:
+
+```sh
+base64 -w0 /path/to/existing-release.jks > /tmp/uninotes-keystore-base64.txt
+```
+
+Delete the temporary Base64 file after setup. Keep the private keystore itself for future updates.
+
+Without these secrets, the workflow deliberately labels the release artifact `unsigned-for-local-signing`. Do not distribute that unsigned file. Sign it privately with the same key, using `scripts/sign-release.py`.
+
+After secrets are configured, every successful push to `main` (or **Run workflow** on `main`) produces `release-signed`. The same APK is signature/alignment checked, installed and launched on the emulator matrix, then automatically uploaded to a new `android-ci-N` prerelease with its SHA-256 checksum. The current `v1.2.0` release is preserved. The CI version code increases with the workflow run number so builds signed with the existing key can update older releases.
+
+To run manually, open **Actions → Android build and device checks → Run workflow → main**. Build reports and device screenshots are available on the run page.
 
 ## Privacy and persistence
 
