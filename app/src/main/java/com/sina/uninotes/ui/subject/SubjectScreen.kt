@@ -1,5 +1,8 @@
 package com.sina.uninotes.ui.subject
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,16 +12,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -30,12 +34,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.TabRowDefaults
@@ -46,28 +54,31 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.style.TextAlign
-import androidx.paging.LoadState
-import androidx.paging.compose.LazyPagingItems
-import androidx.paging.compose.itemKey
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
 import androidx.paging.compose.collectAsLazyPagingItems
+import androidx.paging.compose.itemKey
 import coil.compose.AsyncImage
 import com.sina.uninotes.data.local.db.NoteEntity
 import com.sina.uninotes.data.local.db.PhotoEntity
 import com.sina.uninotes.data.repository.PhotoRepository
+import com.sina.uninotes.data.repository.SubjectRepository
 import com.sina.uninotes.ui.components.ContentText
 import com.sina.uninotes.ui.components.currentLocalDay
 import com.sina.uninotes.ui.theme.UniAccent
@@ -78,12 +89,14 @@ import com.sina.uninotes.ui.theme.UniText
 import com.sina.uninotes.ui.theme.UniTextSecondary
 import com.sina.uninotes.util.DateFormatting
 import java.time.LocalDate
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SubjectScreen(
     viewModel: SubjectViewModel,
     photoRepository: PhotoRepository,
+    subjectRepository: SubjectRepository,
     onBack: () -> Unit,
     onOpenCamera: () -> Unit,
     onWriteNote: () -> Unit,
@@ -95,10 +108,46 @@ fun SubjectScreen(
     val paging = viewModel.photosPaging.collectAsLazyPagingItems()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val today = currentLocalDay()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbar = remember { SnackbarHostState() }
+    var importing by remember { mutableStateOf(false) }
+
+    val galleryPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 30),
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        scope.launch {
+            importing = true
+            val result = photoRepository.importFromUris(
+                resolver = context.contentResolver,
+                subjectId = viewModel.subjectId,
+                uris = uris,
+            )
+            importing = false
+            result.onSuccess { count ->
+                subjectRepository.touchSubject(viewModel.subjectId)
+                snackbar.showSnackbar(
+                    if (count == 1) "Imported 1 photo" else "Imported $count photos",
+                )
+            }.onFailure {
+                snackbar.showSnackbar(it.message ?: "Could not import photos")
+            }
+        }
+    }
 
     Scaffold(
         containerColor = UniBackground,
-        contentWindowInsets = WindowInsets.safeDrawing,
+        // Handle system bars ourselves so action buttons never sit under gesture nav.
+        contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = {
+            SnackbarHost(
+                hostState = snackbar,
+                modifier = Modifier
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 72.dp),
+            )
+        },
         topBar = {
             TopAppBar(
                 title = {
@@ -119,44 +168,88 @@ fun SubjectScreen(
             )
         },
         bottomBar = {
-            Row(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(UniBackground)
-                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(bottom = 12.dp)
                     .testTag("subjectActions")
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                Button(
-                    onClick = onOpenCamera,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = UniAccent,
-                        contentColor = UniBackground,
-                    ),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    Icon(Icons.Default.CameraAlt, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Camera", color = UniBackground, fontWeight = FontWeight.Bold)
+                if (importing) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            strokeWidth = 2.dp,
+                            color = UniPrimary,
+                        )
+                        Spacer(Modifier.size(8.dp))
+                        Text("Importing photos…", color = UniTextSecondary)
+                    }
                 }
-                Button(
-                    onClick = onWriteNote,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(52.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = UniPrimary,
-                        contentColor = UniBackground,
-                    ),
-                    shape = RoundedCornerShape(14.dp),
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Icon(Icons.Default.EditNote, contentDescription = null)
-                    Spacer(Modifier.size(8.dp))
-                    Text("Write note", color = UniBackground, fontWeight = FontWeight.Bold)
+                    Button(
+                        onClick = {
+                            galleryPicker.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly),
+                            )
+                        },
+                        enabled = !importing,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = UniSurface,
+                            contentColor = UniText,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                        Spacer(Modifier.size(4.dp))
+                        Text("Gallery", fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                    Button(
+                        onClick = onOpenCamera,
+                        enabled = !importing,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = UniAccent,
+                            contentColor = UniBackground,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(Icons.Default.CameraAlt, contentDescription = null)
+                        Spacer(Modifier.size(4.dp))
+                        Text("Camera", color = UniBackground, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
+                    Button(
+                        onClick = onWriteNote,
+                        enabled = !importing,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(52.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = UniPrimary,
+                            contentColor = UniBackground,
+                        ),
+                        shape = RoundedCornerShape(14.dp),
+                    ) {
+                        Icon(Icons.Default.EditNote, contentDescription = null)
+                        Spacer(Modifier.size(4.dp))
+                        Text("Note", color = UniBackground, fontWeight = FontWeight.Bold, maxLines = 1)
+                    }
                 }
             }
         },

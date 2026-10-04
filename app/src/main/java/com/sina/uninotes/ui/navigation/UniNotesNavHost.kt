@@ -56,6 +56,7 @@ fun UniNotesNavHost(container: AppContainer) {
             SubjectScreen(
                 viewModel = vm,
                 photoRepository = container.photoRepository,
+                subjectRepository = container.subjectRepository,
                 onBack = { navController.popBackStack() },
                 onOpenCamera = { navController.navigate(Routes.camera(subjectId)) },
                 onWriteNote = { navController.navigate(Routes.noteEditor(subjectId)) },

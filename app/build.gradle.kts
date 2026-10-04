@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
+}
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -14,8 +23,8 @@ android {
         applicationId = "com.sina.uninotes"
         minSdk = 26
         targetSdk = 36
-        versionCode = providers.gradleProperty("uninotesVersionCode").orElse("2").get().toInt()
-        versionName = "1.1.0"
+        versionCode = providers.gradleProperty("uninotesVersionCode").orElse("3").get().toInt()
+        versionName = "1.1.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
@@ -33,12 +42,27 @@ android {
                 enableV3Signing = true
             }
         }
+        if (keystorePropertiesFile.exists()) {
+            create("localRelease") {
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
     }
 
     buildTypes {
         release {
             isDebuggable = false
-            if (!releaseStore.isNullOrBlank()) signingConfig = signingConfigs.getByName("personalRelease")
+            signingConfig = when {
+                !releaseStore.isNullOrBlank() -> signingConfigs.getByName("personalRelease")
+                keystorePropertiesFile.exists() -> signingConfigs.getByName("localRelease")
+                else -> signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

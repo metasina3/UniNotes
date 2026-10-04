@@ -302,7 +302,8 @@ fun CameraScreen(
                 .fillMaxWidth()
                 .background(Color.Black.copy(alpha = 0.75f))
                 .navigationBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(horizontal = 24.dp, vertical = 16.dp)
+                .padding(bottom = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             ui.statusMessage?.let { Text(it, color = Color.White) }

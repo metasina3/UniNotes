@@ -1,6 +1,10 @@
 package com.sina.uninotes.data.repository
 
+import android.content.ContentResolver
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -16,7 +20,11 @@ import kotlinx.coroutines.flow.Flow
 import com.sina.uninotes.data.LibraryAccess
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.time.ZoneId
 
 class PhotoRepository(
@@ -104,6 +112,83 @@ class PhotoRepository(
                 activeCaptures.remove(photo.id)
             }
         }
+    }
+
+    /**
+     * Import a gallery/document image into private subject storage.
+     * Uses only the picker-granted URI — no broad storage permission.
+     */
+    suspend fun importFromUri(
+        resolver: ContentResolver,
+        subjectId: String,
+        uri: Uri,
+        zoneId: ZoneId = ZoneId.systemDefault(),
+    ): Result<PhotoEntity> = withContext(Dispatchers.IO) {
+        runCatching {
+            val jpegBytes = readUriAsJpegBytes(resolver, uri)
+            val capturedAt = readCaptureTimeMs(resolver, uri) ?: System.currentTimeMillis()
+            val photo = beginCapture(subjectId, capturedAt, zoneId)
+            try {
+                captureFile(photo).outputStream().use { it.write(jpegBytes) }
+                completeCapture(photo).getOrThrow()
+            } catch (t: Throwable) {
+                discardCapture(photo)
+                throw t
+            }
+        }
+    }
+
+    suspend fun importFromUris(
+        resolver: ContentResolver,
+        subjectId: String,
+        uris: List<Uri>,
+    ): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            var count = 0
+            uris.forEach { uri ->
+                importFromUri(resolver, subjectId, uri).onSuccess { count++ }
+            }
+            count
+        }
+    }
+
+    private fun readUriAsJpegBytes(resolver: ContentResolver, uri: Uri): ByteArray {
+        val mime = resolver.getType(uri).orEmpty()
+        resolver.openInputStream(uri)?.use { input ->
+            val raw = input.readBytes()
+            if (raw.isEmpty()) throw IllegalStateException("Empty image")
+            if (mime.equals("image/jpeg", ignoreCase = true) || isJpeg(raw)) return raw
+            val bitmap = BitmapFactory.decodeByteArray(raw, 0, raw.size)
+                ?: throw IllegalStateException("Unsupported image")
+            return ByteArrayOutputStream().use { out ->
+                check(bitmap.compress(Bitmap.CompressFormat.JPEG, 92, out)) {
+                    "Could not convert image"
+                }
+                bitmap.recycle()
+                out.toByteArray()
+            }
+        } ?: throw IllegalStateException("Unable to open selected image")
+    }
+
+    private fun isJpeg(bytes: ByteArray): Boolean =
+        bytes.size >= 3 &&
+            bytes[0] == 0xFF.toByte() &&
+            bytes[1] == 0xD8.toByte() &&
+            bytes[2] == 0xFF.toByte()
+
+    private fun readCaptureTimeMs(resolver: ContentResolver, uri: Uri): Long? = try {
+        resolver.openInputStream(uri)?.use { stream ->
+            val exif = ExifInterface(stream)
+            val date = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+                ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
+            if (date.isNullOrBlank()) return null
+            val format = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US).apply {
+                timeZone = TimeZone.getDefault()
+            }
+            format.parse(date)?.time
+        }
+    } catch (_: Exception) {
+        null
     }
 
     suspend fun deletePhoto(photoId: String): Result<Unit> = withContext(Dispatchers.IO) {

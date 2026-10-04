@@ -21,3 +21,5 @@ out/
 *.keystore
 signing.properties
 signing/
+keystore/
+keystore.properties
